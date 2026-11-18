@@ -1,3 +1,4 @@
-2.5
-I canali spuntati si salvano da soli (non serve più premere Salva).
-Il pallino Telegram dice cosa manca: accesso da fare, scegli i canali, oppure quanti canali ascolta.
+2.6
+L app non si può più aprire due volte (due copie insieme facevano scollegare Telegram).
+Se Telegram si scollega, si ricollega da solo e in Attività scrive il motivo.
+Finestra di nuovo con le proporzioni giuste e adattata allo schermo.

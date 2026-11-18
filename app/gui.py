@@ -72,6 +72,15 @@ def _btn(text, slot, kind=None):
     return b
 
 
+def _fit_to_screen(win, w, h):
+    """Dimensione desiderata, ma mai più grande dello schermo del Mac."""
+    scr = QApplication.primaryScreen()
+    if scr is not None:
+        g = scr.availableGeometry()
+        w, h = min(w, int(g.width() * 0.95)), min(h, int(g.height() * 0.92))
+    win.resize(w, h)
+
+
 def _busy(fn):
     """Esegue fn con il cursore di attesa e mostra gli errori in modo comprensibile."""
     QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -89,7 +98,7 @@ class MainWindow(QMainWindow):
         self.last_status = {}
         self.setWindowTitle(f"Telegram → MT5 Copier  (versione {updater.local_version()})")
         self.ui = ui
-        self.resize(1280, 800)
+        _fit_to_screen(self, 1280, 800)
         self.setStyleSheet(STYLE)
 
         # stato in alto
@@ -112,6 +121,7 @@ class MainWindow(QMainWindow):
         sb = QHBoxLayout(self.setup_box)
         self.setup_lbl = QLabel()
         self.setup_lbl.setTextFormat(Qt.RichText)
+        self.setup_lbl.setWordWrap(True)
         sb.addWidget(self.setup_lbl, 1)
         sb.addWidget(_btn("Configura Telegram", lambda: self.open_settings("Telegram"), "primary"))
         sb.addWidget(_btn("Configura MetaTrader", lambda: self.open_settings("MetaTrader"), "primary"))
@@ -193,14 +203,15 @@ class MainWindow(QMainWindow):
         if tg_ok:
             self.lbl_tg.setText(_dot(True, f"Telegram ({len(st.get('channels', []))} canali)"))
         elif st.get("telegram_authorized"):
-            self.lbl_tg.setText('<span style="color:#d29922">●</span> Telegram (scegli i canali: Impostazioni → Telegram)')
+            self.lbl_tg.setText('<span style="color:#d29922">●</span> Telegram (non collegato)')
         else:
-            self.lbl_tg.setText(_dot(False, "Telegram (accesso da fare)"))
+            self.lbl_tg.setText(_dot(False, "Telegram"))
         self.lbl_mt5.setText(_dot(mt_ok, "MetaTrader 5"))
         acc = st.get("account")
         if acc and mt_ok:
             kind = {0: "DEMO", 1: "CONTEST", 2: "REALE"}.get(acc["trade_mode"], "?")
-            self.lbl_acc.setText(f"Conto {acc['login']} ({kind}) · Saldo {acc['balance']:.2f} · Equity {acc['equity']:.2f} {acc['currency']}")
+            self.lbl_acc.setText(f"Conto {acc['login']} ({kind}) · {acc['equity']:.2f} {acc['currency']}")
+            self.lbl_acc.setToolTip(f"Saldo {acc['balance']:.2f} · Equity {acc['equity']:.2f} {acc['currency']}")
         else:
             self.lbl_acc.setText("Conto: —")
         pl = st.get("today_pl")
@@ -208,7 +219,7 @@ class MainWindow(QMainWindow):
         if st.get("paused"):
             mode = '<span style="color:#ff7b7b">⏸ IN PAUSA</span>'
         elif st.get("dry_run", True):
-            mode = '<span style="color:#ffb36b">MODALITÀ PROVA (non apre ordini)</span>'
+            mode = '<span style="color:#ffb36b">MODALITÀ PROVA</span>'
         else:
             mode = '<span style="color:#3fb950">● ATTIVO</span>'
         self.lbl_mode.setText(mode)
@@ -321,7 +332,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.engine = engine
         self.setWindowTitle("Impostazioni")
-        self.resize(1080, 760)
+        _fit_to_screen(self, 1080, 760)
         self.setStyleSheet(STYLE)
         self.widgets = {}
         self.s = engine.settings.get()

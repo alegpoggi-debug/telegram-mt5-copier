@@ -144,8 +144,36 @@ class Engine:
     def mt5_connected(self) -> bool:
         return bool(self.bridge and self.bridge.is_connected())
 
+    async def _telegram_watchdog(self):
+        """Se la connessione a Telegram cade, la ripristina e scrive il motivo nell'attività."""
+        if self.tg is None or not self.tg_authorized or self.tg.is_connected():
+            return
+        reason = getattr(self.tg, "_updates_error", None)
+        self.ui.on_log("Telegram si è scollegato" + (f" ({type(reason).__name__}: {reason})" if reason else "") +
+                       ". Provo a ricollegarmi…", "warn")
+        if reason and ("Duplicated" in type(reason).__name__ or "database is locked" in str(reason)):
+            self.ui.on_log("Motivo: lo stesso accesso a Telegram è usato da due programmi insieme. "
+                           "Tieni aperta solo questa app (chiudi altre copie e la vecchia versione).", "error")
+        try:
+            await self.tg.connect()
+            self.tg_authorized = await self.tg.is_user_authorized()
+        except Exception as e:
+            self.ui.on_log(f"Ricollegamento a Telegram non riuscito: {e}", "error")
+            return
+        if self.tg_authorized:
+            self.ui.on_log("Telegram ricollegato ✔", "ok")
+        else:
+            self.ui.on_log("Telegram ha annullato l'accesso: rifai «Accedi a Telegram» (Impostazioni → Telegram).", "error")
+
     async def _state_loop(self):
+        tick = 0
         while True:
+            tick += 1
+            if tick % 10 == 0:
+                try:
+                    await self._telegram_watchdog()
+                except Exception:
+                    log.exception("controllo Telegram")
             try:
                 self.state = self.bridge.read_state() if self.bridge else None
                 if self.mt5_connected():
