@@ -190,7 +190,12 @@ class MainWindow(QMainWindow):
     def update_status(self, st):
         self.last_status = st
         tg_ok, mt_ok = st.get("telegram"), st.get("mt5")
-        self.lbl_tg.setText(_dot(tg_ok, "Telegram" + (f" ({len(st.get('channels', []))} canali)" if tg_ok else "")))
+        if tg_ok:
+            self.lbl_tg.setText(_dot(True, f"Telegram ({len(st.get('channels', []))} canali)"))
+        elif st.get("telegram_authorized"):
+            self.lbl_tg.setText('<span style="color:#d29922">●</span> Telegram (scegli i canali: Impostazioni → Telegram)')
+        else:
+            self.lbl_tg.setText(_dot(False, "Telegram (accesso da fare)"))
         self.lbl_mt5.setText(_dot(mt_ok, "MetaTrader 5"))
         acc = st.get("account")
         if acc and mt_ok:
@@ -379,8 +384,12 @@ class SettingsDialog(QDialog):
         lay.addLayout(row)
         self.list_channels = QListWidget()
         lay.addWidget(self.list_channels, 1)
+        hint = QLabel("I canali spuntati si salvano da soli e il programma inizia subito ad ascoltarli.")
+        hint.setObjectName("help")
+        lay.addWidget(hint)
         for c in self.s["tg_channels"]:
             self._add_channel_item(c["id"], c["name"], True)
+        self.list_channels.itemChanged.connect(self._channels_changed)
         try:
             me = self.engine.call(self.engine.tg_me(), timeout=10) if self.engine.tg_authorized else None
         except Exception:
@@ -398,6 +407,24 @@ class SettingsDialog(QDialog):
         it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
         it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
         self.list_channels.addItem(it)
+
+    def _checked_channels(self):
+        out = []
+        for i in range(self.list_channels.count()):
+            it = self.list_channels.item(i)
+            if it.checkState() == Qt.Checked:
+                out.append({"id": it.data(Qt.UserRole), "name": it.text()})
+        return out
+
+    def _channels_changed(self, _item):
+        """Salva subito i canali spuntati e li mette in ascolto."""
+        chans = self._checked_channels()
+        self.engine.settings.update({"tg_channels": chans})
+        self.s["tg_channels"] = chans
+        try:
+            self.engine.call(self.engine.reload_channels(), timeout=30)
+        except Exception:
+            pass
 
     def filter_channels(self, text):
         for i in range(self.list_channels.count()):
@@ -439,6 +466,8 @@ class SettingsDialog(QDialog):
             return
         self.lbl_tg_user.setText(f"✅ Collegato come {res}")
         self.load_channels()
+        QMessageBox.information(self, "Collegato", f"Collegato come {res}.\n\nOra SPUNTA i canali da copiare "
+                                "nell'elenco qui sotto: si salvano da soli e il pallino Telegram diventa verde.")
 
     def tg_logout(self):
         if QMessageBox.question(self, "Esci", "Scollegare l'account Telegram da questo programma?") == QMessageBox.Yes:
@@ -457,8 +486,10 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Impossibile leggere i canali:\n{e}")
             return
+        self.list_channels.blockSignals(True)
         for c in chats:
             self._add_channel_item(c["id"], c["name"], False)
+        self.list_channels.blockSignals(False)
 
     # ------------------------------------------------------------ MetaTrader
     def _tab_mt5(self):

@@ -1,3 +1,3 @@
-2.4
-Tornati alla versione semplice: tolte le funzioni di recupero e diagnostica. Resta il pulsante Aggiorna.
-I tuoi dati e l accesso a Telegram restano salvati a ogni aggiornamento.
+2.5
+I canali spuntati si salvano da soli (non serve più premere Salva).
+Il pallino Telegram dice cosa manca: accesso da fare, scegli i canali, oppure quanti canali ascolta.
