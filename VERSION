@@ -1,3 +1,4 @@
-2.2
-Recupera da sola impostazioni, canali e accesso a Telegram dalla cartella della prima versione.
-Ritrova MetaTrader da sola se il percorso salvato non funziona.
+2.3
+Nuovo pulsante: Impostazioni → Telegram → «Recupera dati da una versione precedente».
+Diagnostica all avvio in «Attività»: mostra se Telegram e MetaTrader sono collegati e perché.
+Il recupero automatico non sovrascrive più un accesso a Telegram funzionante.

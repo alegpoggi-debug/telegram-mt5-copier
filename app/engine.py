@@ -125,7 +125,22 @@ class Engine:
         from . import updater
         self.ui.on_log(f"Versione {updater.local_version()} · Python {platform.python_version()} · "
                        f"dati in {DATA_DIR}", "info")
+        s = self.settings.get()
+        sess = DATA_DIR / "telegram.session"
+        self.ui.on_log(f"Diagnostica: codici Telegram {'presenti' if s['tg_api_id'] else 'MANCANTI'} · "
+                       f"accesso salvato {'sì (' + str(sess.stat().st_size) + ' byte)' if sess.exists() else 'NO'} · "
+                       f"canali scelti {len(s['tg_channels'])} · cartella MT5 salvata {s['mt5_dir'] or 'automatica'}", "info")
         self.setup_bridge()
+        if self.bridge:
+            age = self.bridge.state_age()
+            if age is None:
+                self.ui.on_log("MetaTrader: cartella trovata ma il ponte non ha mai scritto nulla: "
+                               "TelegramBridge non è sul grafico di QUESTO MetaTrader.", "warn")
+            elif age > 5:
+                self.ui.on_log(f"MetaTrader: il ponte non risponde da {int(age)} secondi: apri MetaTrader e controlla "
+                               "che TelegramBridge sia sul grafico e Algo Trading sia verde.", "warn")
+            else:
+                self.ui.on_log("MetaTrader: ponte attivo ✔", "ok")
         asyncio.create_task(self._state_loop())
         try:
             await self.start_telegram()
@@ -235,8 +250,15 @@ class Engine:
                 return False
         self.tg_authorized = await self.tg.is_user_authorized()
         if not self.tg_authorized:
-            self.ui.on_log("Telegram: accesso non ancora fatto. Impostazioni → Telegram → Accedi.", "warn")
+            sess = DATA_DIR / "telegram.session"
+            if _had_login(sess):
+                self.ui.on_log("Telegram: c'era un accesso salvato ma Telegram non lo accetta più (scaduto, oppure usato "
+                               "da due programmi insieme, es. la vecchia versione aperta). Rifai «Accedi a Telegram» "
+                               "e tieni aperta solo questa app.", "error")
+            else:
+                self.ui.on_log("Telegram: accesso non ancora fatto. Impostazioni → Telegram → Accedi.", "warn")
             return False
+        self.ui.on_log("Telegram: accesso salvato valido ✔", "ok")
         await self._load_channels()
         if not self._handlers_added:
             self.tg.add_event_handler(self._on_new, events.NewMessage())
@@ -792,6 +814,20 @@ class Engine:
             for o in orders:
                 lines.append("Verrebbe inviato: " + _desc(o))
         return "\n".join(lines)
+
+
+def _had_login(session_file: Path) -> bool:
+    """True se il file di accesso Telegram contiene una chiave (cioè c'era un login)."""
+    import sqlite3
+    if not session_file.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{session_file}?mode=ro", uri=True)
+        row = con.execute("select auth_key from sessions").fetchone()
+        con.close()
+        return bool(row and row[0])
+    except sqlite3.Error:
+        return False
 
 
 def _base(sym: str) -> str:

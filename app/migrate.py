@@ -95,27 +95,23 @@ def _from_first_version(folder: Path) -> dict:
     return out
 
 
-def import_old_data(data_dir: Path, home: Path | None = None, force: bool = False) -> list[str]:
-    """Esegue il recupero una volta sola. Ritorna i messaggi da mostrare nell'attività."""
-    home = home or Path.home()
-    data_dir = Path(data_dir)
-    if data_dir.resolve().parent.name.startswith("telegram-mt5-agent"):
-        return []  # stiamo girando dalla cartella vecchia stessa: niente da recuperare
-    marker = data_dir / MARKER
-    if marker.exists() and not force:
-        return []
-    msgs = []
-    try:
-        cands = [d for d in _candidates(home) if d != data_dir.resolve()]
-    except PermissionError:
-        return ["Non ho il permesso di leggere Documenti/Scrivania/Download: chiudi e riapri l'app e premi «Consenti»."]
-    if not cands:
-        return ["Nessuna cartella della versione precedente (telegram-mt5-agent) trovata in Scrivania, Documenti o Download. "
-                "Se il Mac ha chiesto l'accesso a queste cartelle, premi «Consenti» e riapri l'app."]
-    best = max(cands, key=_score)
-    if _score(best) == (False, False, _score(best)[2]):
-        return [f"Trovata la cartella precedente {best.parent}, ma non contiene impostazioni da recuperare."]
+def _resolve_old_folder(path: Path) -> Path | None:
+    """Accetta la cartella telegram-mt5-agent oppure la sua sottocartella data."""
+    path = Path(path)
+    if (path / "data").is_dir():
+        return path / "data"
+    if path.name == "data" and path.is_dir():
+        return path
+    if (path / "config.json").exists():
+        (path / "data").mkdir(exist_ok=True)
+        return path / "data"
+    return None
 
+
+def import_from(old_data: Path, data_dir: Path, overwrite_login: bool = True) -> list[str]:
+    """Copia impostazioni, accesso a Telegram e storico da old_data a data_dir (con copia di sicurezza)."""
+    msgs = []
+    data_dir = Path(data_dir)
     # 1) copia di sicurezza dei dati attuali
     if data_dir.exists() and any(data_dir.iterdir()):
         backup = data_dir.parent / f"backup-dati-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -131,31 +127,63 @@ def import_old_data(data_dir: Path, home: Path | None = None, force: bool = Fals
         pass
     old = {}
     try:
-        old = json.loads((best / "settings.json").read_text(encoding="utf-8"))
+        old = json.loads((old_data / "settings.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
-    first = _from_first_version(best.parent)
     merged = dict(current)
-    merged.update(first)
+    merged.update(_from_first_version(old_data.parent))
     merged.update(old)
     (data_dir / "settings.json").write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
-    n_ch = len(merged.get("tg_channels") or [])
-    msgs.append(f"Impostazioni recuperate da {best.parent} ({n_ch} canali).")
+    msgs.append(f"Impostazioni recuperate da {old_data.parent} ({len(merged.get('tg_channels') or [])} canali, "
+                f"api_id Telegram {'presente' if merged.get('tg_api_id') else 'assente'}).")
 
     # 3) accesso a Telegram
-    session = best / "telegram.session"
-    if not session.exists() and (best / "tg_session.session").exists():
-        session = best / "tg_session.session"
+    session = old_data / "telegram.session"
+    if not session.exists() and (old_data / "tg_session.session").exists():
+        session = old_data / "tg_session.session"
     if session.exists():
-        shutil.copy2(session, data_dir / "telegram.session")
-        msgs.append("Accesso a Telegram recuperato.")
+        if overwrite_login or not (data_dir / "telegram.session").exists():
+            shutil.copy2(session, data_dir / "telegram.session")
+            msgs.append("Accesso a Telegram recuperato.")
+        else:
+            msgs.append("Accesso a Telegram attuale mantenuto.")
     else:
-        msgs.append("Nella cartella precedente non c'è l'accesso a Telegram: rifai «Accedi a Telegram» (le altre impostazioni ci sono).")
+        msgs.append("Nella cartella precedente non c'è un accesso a Telegram salvato.")
 
     # 4) storico dei segnali (serve a gestire le operazioni già aperte)
-    if (best / "signals.json").exists():
-        shutil.copy2(best / "signals.json", data_dir / "signals.json")
+    if (old_data / "signals.json").exists():
+        shutil.copy2(old_data / "signals.json", data_dir / "signals.json")
 
-    marker.write_text(json.dumps({"da": str(best), "quando": dt.datetime.now().isoformat(timespec="seconds")},
-                                 ensure_ascii=False), encoding="utf-8")
+    (data_dir / MARKER).write_text(json.dumps({"da": str(old_data), "quando": dt.datetime.now().isoformat(timespec="seconds")},
+                                              ensure_ascii=False), encoding="utf-8")
     return msgs
+
+
+def import_old_data(data_dir: Path, home: Path | None = None, force: bool = False) -> list[str]:
+    """Recupero automatico all'avvio (una volta sola). Ritorna i messaggi da mostrare nell'attività."""
+    home = home or Path.home()
+    data_dir = Path(data_dir)
+    if data_dir.resolve().parent.name.startswith("telegram-mt5-agent"):
+        return []  # stiamo girando dalla cartella vecchia stessa: niente da recuperare
+    marker = data_dir / MARKER
+    if marker.exists() and not force:
+        return []
+    # se l'app è già configurata (codici + accesso salvato) non tocco niente
+    try:
+        cur = json.loads((data_dir / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cur = {}
+    if cur.get("tg_api_id") and (data_dir / "telegram.session").exists() and not force:
+        marker.write_text(json.dumps({"saltato": "app già configurata"}), encoding="utf-8")
+        return []
+    try:
+        cands = [d for d in _candidates(home) if d != data_dir.resolve()]
+    except PermissionError:
+        return ["Non ho il permesso di leggere Documenti/Scrivania/Download: chiudi e riapri l'app e premi «Consenti»."]
+    if not cands:
+        return ["Recupero automatico: nessuna cartella «telegram-mt5-agent» trovata in Scrivania, Documenti o Download. "
+                "Puoi indicarla tu: Impostazioni → Telegram → «Recupera dati da una versione precedente»."]
+    best = max(cands, key=_score)
+    if _score(best)[:2] == (False, False):
+        return [f"Trovata la cartella precedente {best.parent}, ma non contiene impostazioni da recuperare."]
+    return import_from(best, data_dir, overwrite_login=False)

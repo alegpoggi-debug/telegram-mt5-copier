@@ -61,8 +61,30 @@ def main():
     app_data = home / "AS" / "data"
     app_data.mkdir(parents=True)
     msgs = import_old_data(app_data, home=home)
-    assert not (app_data / MARKER).exists() and "Nessuna cartella" in msgs[0]
+    assert not (app_data / MARKER).exists() and "nessuna cartella" in msgs[0]
     print("C ok:", msgs[0][:60])
+    # --- D) app già configurata: il recupero automatico non tocca niente
+    home = Path(tempfile.mkdtemp())
+    old = home / "Desktop" / "telegram-mt5-agent" / "data"
+    old.mkdir(parents=True)
+    (old / "settings.json").write_text(json.dumps({"tg_api_id": "999"}))
+    (old / "telegram.session").write_bytes(b"VECCHIA")
+    app_data = home / "AS" / "data"
+    app_data.mkdir(parents=True)
+    (app_data / "settings.json").write_text(json.dumps({"tg_api_id": "555"}))
+    (app_data / "telegram.session").write_bytes(b"ATTUALE")
+    assert import_old_data(app_data, home=home) == []
+    assert (app_data / "telegram.session").read_bytes() == b"ATTUALE"
+    assert json.loads((app_data / "settings.json").read_text())["tg_api_id"] == "555"
+    print("D ok: app già configurata, nulla toccato")
+
+    # --- E) recupero manuale (pulsante): sovrascrive, con copia di sicurezza
+    from app.migrate import _resolve_old_folder, import_from
+    msgs = import_from(_resolve_old_folder(old.parent), app_data, overwrite_login=True)
+    assert (app_data / "telegram.session").read_bytes() == b"VECCHIA"
+    assert json.loads((app_data / "settings.json").read_text())["tg_api_id"] == "999"
+    assert list(app_data.parent.glob("backup-dati-*"))
+    print("E ok:", msgs[-1])
     print("TEST RECUPERO DATI SUPERATI")
 
 
