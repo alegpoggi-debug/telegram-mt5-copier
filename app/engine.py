@@ -138,7 +138,7 @@ class Engine:
             self.ui.on_log("MetaTrader 5 non trovato. Installa/avvia MT5, poi Impostazioni → MetaTrader → Trova.", "warn")
             return None
         self.bridge = Bridge(path)
-        self.ui.on_log(f"Cartella di collegamento MT5: {self.bridge.dir}", "info")
+        self.ui.on_log("MetaTrader trovato.", "info")
         return path
 
     def mt5_connected(self) -> bool:

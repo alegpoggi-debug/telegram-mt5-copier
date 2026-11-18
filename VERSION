@@ -1,4 +1,3 @@
-2.6
-L app non si può più aprire due volte (due copie insieme facevano scollegare Telegram).
-Se Telegram si scollega, si ricollega da solo e in Attività scrive il motivo.
-Finestra di nuovo con le proporzioni giuste e adattata allo schermo.
+2.7
+Nuovo design minimale: finestra principale più pulita, impostazioni ridotte all essenziale e spiegate meglio.
+I canali si attivano cliccando sulla riga.
