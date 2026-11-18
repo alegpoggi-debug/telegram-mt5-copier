@@ -13,6 +13,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -56,8 +57,17 @@ def _get(url: str) -> bytes:
         ctx = ssl.create_default_context(cafile=certifi.where())
     except ImportError:
         pass
-    with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
-        return r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
+            return r.read()
+    except (ssl.SSLError, urllib.error.URLError) as e:
+        # alcuni Python su Mac non hanno i certificati: uso curl di sistema
+        if sys.platform == "darwin" and os.path.exists("/usr/bin/curl"):
+            res = subprocess.run(["/usr/bin/curl", "-fsSL", "--max-time", str(TIMEOUT * 3), url],
+                                 capture_output=True, check=False)
+            if res.returncode == 0:
+                return res.stdout
+        raise e
 
 
 def check() -> dict | None:

@@ -120,6 +120,11 @@ class Engine:
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
     async def _main(self):
+        import platform
+
+        from . import updater
+        self.ui.on_log(f"Versione {updater.local_version()} · Python {platform.python_version()} · "
+                       f"dati in {DATA_DIR}", "info")
         self.setup_bridge()
         asyncio.create_task(self._state_loop())
         try:
@@ -132,7 +137,11 @@ class Engine:
     # ================================================================ MT5
     def setup_bridge(self, path_override: str | None = None) -> Path | None:
         d = path_override or self.settings["mt5_dir"]
-        path = Path(d).expanduser() if d else find_common_files_dir()
+        path = Path(d).expanduser() if d else None
+        if path is None or not path.exists():
+            if d:
+                self.ui.on_log(f"La cartella MetaTrader salvata non esiste più ({d}): la cerco da solo.", "warn")
+            path = find_common_files_dir()
         if path is None or not path.exists():
             self.bridge = None
             self.ui.on_log("MetaTrader 5 non trovato. Installa/avvia MT5, poi Impostazioni → MetaTrader → Trova.", "warn")
@@ -237,7 +246,27 @@ class Engine:
 
     async def _load_channels(self):
         self.channels = {}
-        for c in self.settings["tg_channels"]:
+        chans = self.settings["tg_channels"]
+        if any(c.get("id") is None for c in chans):
+            # canali salvati solo per nome (versione precedente): trovo l'id
+            by_name = {}
+            async for d in self.tg.iter_dialogs():
+                by_name[(d.name or "").strip().lower()] = d.id
+                uname = getattr(d.entity, "username", None)
+                if uname:
+                    by_name["@" + uname.lower()] = d.id
+            fixed = []
+            for c in chans:
+                if c.get("id") is None:
+                    cid = by_name.get(c["name"].strip().lower())
+                    if cid is None:
+                        self.ui.on_log(f"Canale «{c['name']}» non trovato tra i tuoi: sceglilo in Impostazioni → Telegram.", "warn")
+                        continue
+                    c = {"id": cid, "name": c["name"]}
+                fixed.append(c)
+            self.settings.update({"tg_channels": fixed})
+            chans = fixed
+        for c in chans:
             self.channels[int(c["id"])] = c["name"]
             self.recent_ids.setdefault(int(c["id"]), collections.deque(maxlen=50))
         if not self.channels:
