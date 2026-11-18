@@ -120,27 +120,7 @@ class Engine:
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
     async def _main(self):
-        import platform
-
-        from . import updater
-        self.ui.on_log(f"Versione {updater.local_version()} · Python {platform.python_version()} · "
-                       f"dati in {DATA_DIR}", "info")
-        s = self.settings.get()
-        sess = DATA_DIR / "telegram.session"
-        self.ui.on_log(f"Diagnostica: codici Telegram {'presenti' if s['tg_api_id'] else 'MANCANTI'} · "
-                       f"accesso salvato {'sì (' + str(sess.stat().st_size) + ' byte)' if sess.exists() else 'NO'} · "
-                       f"canali scelti {len(s['tg_channels'])} · cartella MT5 salvata {s['mt5_dir'] or 'automatica'}", "info")
         self.setup_bridge()
-        if self.bridge:
-            age = self.bridge.state_age()
-            if age is None:
-                self.ui.on_log("MetaTrader: cartella trovata ma il ponte non ha mai scritto nulla: "
-                               "TelegramBridge non è sul grafico di QUESTO MetaTrader.", "warn")
-            elif age > 5:
-                self.ui.on_log(f"MetaTrader: il ponte non risponde da {int(age)} secondi: apri MetaTrader e controlla "
-                               "che TelegramBridge sia sul grafico e Algo Trading sia verde.", "warn")
-            else:
-                self.ui.on_log("MetaTrader: ponte attivo ✔", "ok")
         asyncio.create_task(self._state_loop())
         try:
             await self.start_telegram()
@@ -152,11 +132,7 @@ class Engine:
     # ================================================================ MT5
     def setup_bridge(self, path_override: str | None = None) -> Path | None:
         d = path_override or self.settings["mt5_dir"]
-        path = Path(d).expanduser() if d else None
-        if path is None or not path.exists():
-            if d:
-                self.ui.on_log(f"La cartella MetaTrader salvata non esiste più ({d}): la cerco da solo.", "warn")
-            path = find_common_files_dir()
+        path = Path(d).expanduser() if d else find_common_files_dir()
         if path is None or not path.exists():
             self.bridge = None
             self.ui.on_log("MetaTrader 5 non trovato. Installa/avvia MT5, poi Impostazioni → MetaTrader → Trova.", "warn")
@@ -250,15 +226,8 @@ class Engine:
                 return False
         self.tg_authorized = await self.tg.is_user_authorized()
         if not self.tg_authorized:
-            sess = DATA_DIR / "telegram.session"
-            if _had_login(sess):
-                self.ui.on_log("Telegram: c'era un accesso salvato ma Telegram non lo accetta più (scaduto, oppure usato "
-                               "da due programmi insieme, es. la vecchia versione aperta). Rifai «Accedi a Telegram» "
-                               "e tieni aperta solo questa app.", "error")
-            else:
-                self.ui.on_log("Telegram: accesso non ancora fatto. Impostazioni → Telegram → Accedi.", "warn")
+            self.ui.on_log("Telegram: accesso non ancora fatto. Impostazioni → Telegram → Accedi.", "warn")
             return False
-        self.ui.on_log("Telegram: accesso salvato valido ✔", "ok")
         await self._load_channels()
         if not self._handlers_added:
             self.tg.add_event_handler(self._on_new, events.NewMessage())
@@ -268,27 +237,7 @@ class Engine:
 
     async def _load_channels(self):
         self.channels = {}
-        chans = self.settings["tg_channels"]
-        if any(c.get("id") is None for c in chans):
-            # canali salvati solo per nome (versione precedente): trovo l'id
-            by_name = {}
-            async for d in self.tg.iter_dialogs():
-                by_name[(d.name or "").strip().lower()] = d.id
-                uname = getattr(d.entity, "username", None)
-                if uname:
-                    by_name["@" + uname.lower()] = d.id
-            fixed = []
-            for c in chans:
-                if c.get("id") is None:
-                    cid = by_name.get(c["name"].strip().lower())
-                    if cid is None:
-                        self.ui.on_log(f"Canale «{c['name']}» non trovato tra i tuoi: sceglilo in Impostazioni → Telegram.", "warn")
-                        continue
-                    c = {"id": cid, "name": c["name"]}
-                fixed.append(c)
-            self.settings.update({"tg_channels": fixed})
-            chans = fixed
-        for c in chans:
+        for c in self.settings["tg_channels"]:
             self.channels[int(c["id"])] = c["name"]
             self.recent_ids.setdefault(int(c["id"]), collections.deque(maxlen=50))
         if not self.channels:
@@ -814,20 +763,6 @@ class Engine:
             for o in orders:
                 lines.append("Verrebbe inviato: " + _desc(o))
         return "\n".join(lines)
-
-
-def _had_login(session_file: Path) -> bool:
-    """True se il file di accesso Telegram contiene una chiave (cioè c'era un login)."""
-    import sqlite3
-    if not session_file.exists():
-        return False
-    try:
-        con = sqlite3.connect(f"file:{session_file}?mode=ro", uri=True)
-        row = con.execute("select auth_key from sessions").fetchone()
-        con.close()
-        return bool(row and row[0])
-    except sqlite3.Error:
-        return False
 
 
 def _base(sym: str) -> str:

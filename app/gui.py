@@ -379,7 +379,6 @@ class SettingsDialog(QDialog):
         lay.addLayout(row)
         self.list_channels = QListWidget()
         lay.addWidget(self.list_channels, 1)
-        lay.addWidget(_btn("📂  Recupera dati da una versione precedente…", self.import_old))
         for c in self.s["tg_channels"]:
             self._add_channel_item(c["id"], c["name"], True)
         try:
@@ -448,36 +447,6 @@ class SettingsDialog(QDialog):
             except Exception:
                 pass
             self.lbl_tg_user.setText("Non collegato")
-
-    def import_old(self):
-        QMessageBox.information(self, "Recupera dati",
-                                "Nella finestra che si apre scegli la cartella «telegram-mt5-agent» della versione "
-                                "precedente (quella con Avvia.command), poi premi «Apri».")
-        d = QFileDialog.getExistingDirectory(self, "Scegli la cartella telegram-mt5-agent della versione precedente")
-        if not d:
-            return
-        from pathlib import Path
-
-        from .config import DATA_DIR
-        from .migrate import _resolve_old_folder, import_from
-        old = _resolve_old_folder(Path(d))
-        if old is None:
-            QMessageBox.warning(self, "Cartella sbagliata", "In questa cartella non ci sono dati della versione precedente.\n"
-                                "Scegli la cartella «telegram-mt5-agent» (quella che contiene la cartella «data»).")
-            return
-        try:
-            if self.engine.tg is not None:
-                self.engine.call(self.engine.tg.disconnect(), timeout=10)
-        except Exception:
-            pass
-        try:
-            msgs = import_from(old, DATA_DIR, overwrite_login=True)
-        except Exception as e:
-            QMessageBox.critical(self, "Errore", f"Recupero non riuscito:\n{e}")
-            return
-        QMessageBox.information(self, "Fatto", "\n".join(msgs) + "\n\nL'app ora si riavvia per usare i dati recuperati.")
-        updater.restart()
-        QApplication.quit()
 
     def load_channels(self):
         if not self.engine.tg_authorized:

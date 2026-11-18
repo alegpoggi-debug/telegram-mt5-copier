@@ -1,4 +1,3 @@
-2.3
-Nuovo pulsante: Impostazioni → Telegram → «Recupera dati da una versione precedente».
-Diagnostica all avvio in «Attività»: mostra se Telegram e MetaTrader sono collegati e perché.
-Il recupero automatico non sovrascrive più un accesso a Telegram funzionante.
+2.4
+Tornati alla versione semplice: tolte le funzioni di recupero e diagnostica. Resta il pulsante Aggiorna.
+I tuoi dati e l accesso a Telegram restano salvati a ogni aggiornamento.

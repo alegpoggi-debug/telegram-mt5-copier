@@ -31,14 +31,6 @@ def main():
         app.setWindowIcon(QIcon(str(icon)))
     keep_mac_awake()
 
-    # recupero (una volta sola) dei dati della versione in cartella, prima di caricare le impostazioni
-    try:
-        from app.migrate import import_old_data
-        import_msgs = import_old_data(DATA_DIR)
-    except Exception as e:  # il recupero non deve mai impedire l'avvio
-        logging.exception("recupero dati")
-        import_msgs = [f"Recupero dei dati precedenti non riuscito: {e}"]
-
     from app.engine import Engine
     from app.gui import MainWindow, UiBridge
 
@@ -46,8 +38,6 @@ def main():
     engine = Engine(ui)
     win = MainWindow(ui, engine)
     win.show()
-    for m in import_msgs:
-        ui.on_log(m, "ok")
     engine.start()
     return app.exec()
 
