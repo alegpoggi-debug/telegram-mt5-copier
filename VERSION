@@ -1,3 +1,3 @@
-2.8
-Nuovo: grafico delle operazioni. Doppio clic su un operazione: candele, freccia di entrata, punto di chiusura, SL e TP.
-Una volta sola: Impostazioni → MetaTrader → «Installa il ponte», poi in MetaEditor apri TelegramBridge e premi «Compila».
+2.9
+Grafico più leggibile: le candele occupano tutta l altezza, SL e TP lontani restano sul bordo, vista centrata sull operazione.
+Pulsanti − / + e «Adatta» per lo zoom, finestra più grande. Il ponte non va aggiornato.

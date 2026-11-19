@@ -195,22 +195,51 @@ class CandleChart(QWidget):
     # ---------------------------------------------------------------- dati
     def set_data(self, bars, trade, tf, keep_view=False):
         old_len = len(self.bars)
+        old_t0 = self.times[self.vs] if keep_view and self.times and self.vs < len(self.times) else None
         self.bars, self.trade, self.tf = bars, trade, tf
         self.times = [b[0] for b in bars]
         self.message = "" if bars else self.message
         self.digits = self._guess_digits()
-        if keep_view and old_len and self.vc:
+        if keep_view and old_len and self.vc and old_t0 is not None:
             at_end = self.vs + self.vc >= old_len - 1
             self.vc = min(self.vc, len(bars))
+            # la vista resta sugli stessi orari anche se arrivano candele nuove
+            self.vs = self._index(old_t0)
             if at_end:
                 self.vs = max(0, len(bars) - self.vc)
             self.vs = min(self.vs, max(0, len(bars) - self.vc))
         else:
-            self.vc = min(len(bars), 160) if len(bars) > 160 else len(bars)
-            self.vs = max(0, len(bars) - self.vc)
-            if trade and trade.entry_time and len(bars) > self.vc:
-                i = self._index(trade.entry_time)
-                self.vs = max(0, min(i - 20, len(bars) - self.vc))
+            self.fit_view()
+            return
+        self.update()
+
+    def fit_view(self):
+        """Vista iniziale: l'operazione in primo piano, con poche candele grandi."""
+        n = len(self.bars)
+        if not n:
+            return
+        tr = self.trade
+        if tr and tr.entry_time:
+            i0 = self._index(tr.entry_time)
+            i1 = self._index(tr.exit_time) if tr.exit_time else n - 1
+            margin = max(8, int((i1 - i0) * 0.35))
+            a, b = max(0, i0 - margin), min(n - 1, i1 + margin)
+            vc = max(b - a + 1, min(n, 36))
+            if vc > 140:          # operazione molto lunga: parto dall'entrata
+                vc = 140
+            self.vc = min(n, vc)
+            self.vs = max(0, min(a, n - self.vc))
+        else:
+            self.vc = min(n, 70)
+            self.vs = n - self.vc
+        self.update()
+
+    def zoom(self, factor):
+        if not self.bars:
+            return
+        center = self.vs + self.vc / 2
+        self.vc = max(12, min(len(self.bars), int(round(self.vc * factor))))
+        self.vs = int(max(0, min(len(self.bars) - self.vc, center - self.vc / 2)))
         self.update()
 
     def set_message(self, text):
@@ -245,10 +274,14 @@ class CandleChart(QWidget):
         lo = min(b[3] for b in vis)
         hi = max(b[2] for b in vis)
         t = self.trade
-        if t:
-            for p in (t.entry_price, t.exit_price, t.sl, t.tp):
-                if p:
-                    lo, hi = min(lo, p), max(hi, p)
+        if t and t.entry_time:
+            last = self.vs + self.vc - 1
+            pts = [(self._index(t.entry_time), t.entry_price)]
+            if t.exit_time and t.exit_price:
+                pts.append((self._index(t.exit_time), t.exit_price))
+            for i, price in pts:
+                if self.vs <= i <= last:
+                    lo, hi = min(lo, price), max(hi, price)
         span = (hi - lo) or abs(hi) * 0.001 or 1
         room = 46 / max(self._plot().height(), 100)   # spazio per frecce ed etichette
         pad = span * (0.06 + room)
@@ -275,7 +308,7 @@ class CandleChart(QWidget):
         # griglia e prezzi (senza sovrapporsi alle etichette di prezzo attuale, SL e TP)
         tags = [y(self.bars[-1][4])]
         if self.trade:
-            tags += [y(v) for v in (self.trade.sl, self.trade.tp) if v]
+            tags += [min(max(y(v), plot.top() + 9), plot.bottom() - 9) for v in (self.trade.sl, self.trade.tp) if v]
         step = _nice_step(hi - lo)
         v = math.ceil(lo / step) * step
         while v <= hi:
@@ -303,7 +336,7 @@ class CandleChart(QWidget):
         # candele
         p.save()
         p.setClipRect(plot)
-        body_w = max(1.0, bw * 0.62)
+        body_w = max(1.0, bw * 0.7)
         for i in range(self.vs, min(len(self.bars), self.vs + self.vc)):
             t, o, h, l_, c = self.bars[i]
             x = self._x(plot, i)
@@ -320,9 +353,9 @@ class CandleChart(QWidget):
         self._hline(p, plot, y(last_close), QColor(gui.MUTED), f"{last_close:.{self.digits}f}", dash=False, faint=True)
         if tr:
             if tr.sl:
-                self._hline(p, plot, y(tr.sl), QColor(gui.RED), f"SL {tr.sl:.{self.digits}f}")
+                self._level(p, plot, y(tr.sl), QColor(gui.RED), "SL", tr.sl)
             if tr.tp:
-                self._hline(p, plot, y(tr.tp), QColor(gui.GREEN), f"TP {tr.tp:.{self.digits}f}")
+                self._level(p, plot, y(tr.tp), QColor(gui.GREEN), "TP", tr.tp)
             if tr.is_order or tr.entry_time is None:
                 self._hline(p, plot, y(tr.entry_price), QColor(gui.BLUE),
                             f"{'Ordine' if tr.is_order else 'Entrata'} {tr.entry_price:.{self.digits}f}")
@@ -359,6 +392,19 @@ class CandleChart(QWidget):
         self._tag(p, QRectF(plot.right() + 2, yy - 9, self.AXIS_W - 4, 18), text, bg,
                   QColor(gui.TEXT) if faint else QColor("#0b0f14"))
 
+    def _level(self, p, plot, yy, col, name, price):
+        """SL/TP: linea se visibile, altrimenti etichetta sul bordo con la freccia verso dove si trova."""
+        text = f"{name} {price:.{self.digits}f}"
+        if plot.top() <= yy <= plot.bottom():
+            self._hline(p, plot, yy, col, text)
+            return
+        up = yy < plot.top()
+        edge = plot.top() + 9 if up else plot.bottom() - 9
+        bg = QColor(col)
+        bg.setAlpha(230)
+        self._tag(p, QRectF(plot.right() + 2, edge - 9, self.AXIS_W - 4, 18), f"{'▲' if up else '▼'} {text}", bg,
+                  QColor("#0b0f14"))
+
     def _tag(self, p, rect, text, bg, fg):
         path = QPainterPath()
         path.addRoundedRect(rect, 4, 4)
@@ -377,6 +423,16 @@ class CandleChart(QWidget):
         res_col = QColor(gui.GREEN if win else gui.RED)
         p.save()
         p.setClipRect(plot.adjusted(-2, -2, 2, 2))
+        # fascia della durata dell'operazione
+        bw = self._bar_w(plot)
+        band = QColor(res_col)
+        band.setAlpha(22)
+        p.fillRect(QRectF(min(xi, xo) - bw / 2, plot.top(), abs(xo - xi) + bw, plot.height()), band)
+        # prezzo di entrata
+        ent = QColor(gui.TEXT)
+        ent.setAlpha(90)
+        p.setPen(QPen(ent, 1, Qt.DotLine))
+        p.drawLine(QPointF(xi, yi), QPointF(xo, yi))
         # linea entrata → uscita
         line = QColor(res_col)
         line.setAlpha(200)
@@ -402,7 +458,8 @@ class CandleChart(QWidget):
         p.setBrush(col)
         p.drawPolygon(tri)
         p.setPen(col)
-        p.drawText(QRectF(xi - 60, lbl_y, 120, 16), Qt.AlignCenter, f"{'BUY' if buy else 'SELL'} {tr.volume:g}")
+        p.drawText(QRectF(xi - 100, lbl_y, 200, 16), Qt.AlignCenter,
+                   f"{'BUY' if buy else 'SELL'} {tr.volume:g}  ·  {tr.entry_price:.{self.digits}f}")
         # punto di uscita
         if tr.exit_time:
             p.setPen(QPen(res_col, 2))
@@ -413,7 +470,8 @@ class CandleChart(QWidget):
             p.setPen(res_col)
             above = (yo < yi) if buy else (yo <= yi)
             ty = yo - 26 if above else yo + 10
-            p.drawText(QRectF(xo - 60, ty, 120, 16), Qt.AlignCenter, f"{tr.profit:+.2f}")
+            p.drawText(QRectF(xo - 100, ty, 200, 16), Qt.AlignCenter,
+                       f"{tr.profit:+.2f}  ·  {tr.exit_price:.{self.digits}f}")
         p.restore()
 
     # ---------------------------------------------------------------- mouse
@@ -435,6 +493,9 @@ class CandleChart(QWidget):
 
     def mouseReleaseEvent(self, _e):
         self._drag = None
+
+    def mouseDoubleClickEvent(self, _e):
+        self.fit_view()
 
     def wheelEvent(self, e):
         if not self.bars:
@@ -473,13 +534,14 @@ class ChartWindow(QDialog):
         self.server_now = 0
         self._busy = False
         self._last_key = None
+        self._last_state = None
         self.setWindowTitle("Grafico")
         self.setStyleSheet(gui.STYLE + f"""
             QPushButton#tf {{ background: transparent; border: none; color: {gui.MUTED}; padding: 5px 9px; border-radius: 6px; }}
             QPushButton#tf:checked {{ background: {gui.SURFACE2}; color: {gui.TEXT}; }}
             QPushButton#tf:hover {{ color: {gui.TEXT}; }}""")
         self.setMinimumSize(760, 480)
-        gui._fit_to_screen(self, 1080, 680)
+        gui._fit_to_screen(self, 1280, 820)
 
         self.cb = QComboBox()
         self.cb.setMinimumWidth(400)
@@ -501,6 +563,16 @@ class ChartWindow(QDialog):
         top.addWidget(self.cb)
         top.addStretch(1)
         top.addLayout(tf_row)
+        top.addSpacing(10)
+        for text, tip, fn in (("−", "Allontana", lambda: self.chart.zoom(1.35)),
+                              ("+", "Avvicina", lambda: self.chart.zoom(1 / 1.35)),
+                              ("Adatta", "Torna alla vista dell'operazione", lambda: self.chart.fit_view())):
+            b = QPushButton(text)
+            b.setObjectName("tf")
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(fn)
+            top.addWidget(b)
 
         self.info = [gui._label("", "pill") for _ in range(5)]
         info_row = QHBoxLayout()
@@ -512,7 +584,8 @@ class ChartWindow(QDialog):
         card, cl = gui._card(margins=8)
         self.chart = CandleChart()
         cl.addWidget(self.chart)
-        hint = gui._label("Rotella del mouse: zoom  ·  trascina: sposta  ·  orari del broker", "muted")
+        hint = gui._label("Rotella o − / +: zoom  ·  trascina: sposta  ·  doppio clic o «Adatta»: torna all'operazione"
+                          "  ·  orari del broker", "muted")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 14)
@@ -599,7 +672,9 @@ class ChartWindow(QDialog):
         idx = self.cb.findData(current) if current is not None else -1
         self.cb.setCurrentIndex(idx if idx >= 0 else 0)
         self.cb.blockSignals(False)
-        self.load_chart(keep_view=(self.cb.currentData() == self._last_key))
+        sel = self.selected()
+        state = (sel.key, sel.is_open) if sel else None
+        self.load_chart(keep_view=(state == self._last_state))   # appena si chiude: torna sull'operazione
 
     def selected(self) -> Trade | None:
         key = self.cb.currentData()
@@ -630,6 +705,7 @@ class ChartWindow(QDialog):
         start, stop = rates_range(tr, tf, self.server_now or int(dt.datetime.now().timestamp()))
         cmd = {"action": "RATES", "symbol": tr.symbol, "tf": tf, "from": max(0, start), "to": stop}
         self._last_key = tr.key
+        self._last_state = (tr.key, tr.is_open)
         self._run(fetch(self.engine.bridge, cmd), lambda r, e: self._got_rates(r, e, tr, tf, keep_view))
 
     def _got_rates(self, result, err, tr, tf, keep_view):

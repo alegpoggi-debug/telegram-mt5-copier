@@ -142,8 +142,8 @@ def main():
     app = QApplication([])
     ea = FakeEA(TMP / "Common/Files")
     ea.deals = list(deals)
-    ea.positions = {200: {"symbol": "XAUUSD", "side": "sell", "volume": 0.01, "price": 2003.0, "sl": 2010.0,
-                          "tp": 1990.0, "profit": 2.4, "magic": M}}
+    ea.positions = {200: {"symbol": "XAUUSD", "side": "sell", "volume": 0.01, "price": 2003.0, "sl": 2060.0,
+                          "tp": 1940.0, "profit": 2.4, "magic": M}}
     ea.start()
     ui = gui.UiBridge()
     eng = Engine(ui)
@@ -170,6 +170,23 @@ def main():
     check("SELL" in cw.info[0].text() and "Aperta" in cw.info[3].text(), "intestazione operazione")
     cw.resize(1080, 680)
     QTest.qWait(100)
+    # scala verticale: segue le candele, non SL/TP lontani
+    lo, hi = cw.chart._range()
+    vis = cw.chart.bars[cw.chart.vs:cw.chart.vs + cw.chart.vc]
+    check(hi < 2060 and lo > 1940, "SL e TP lontani non schiacciano il grafico", (lo, hi))
+    top_p = max(max(b[2] for b in vis), cw.chart.trade.entry_price)
+    bot_p = min(min(b[3] for b in vis), cw.chart.trade.entry_price)
+    check((top_p - bot_p) / (hi - lo) > 0.7, "candele ed entrata occupano quasi tutta l'altezza", (top_p, bot_p, lo, hi))
+    i0 = cw.chart._index(cw.chart.trade.entry_time)
+    check(cw.chart.vs <= i0 < cw.chart.vs + cw.chart.vc and 12 <= cw.chart.vc <= 140, "vista iniziale sull'operazione",
+          (cw.chart.vs, cw.chart.vc, i0))
+    vc0, vs0 = cw.chart.vc, cw.chart.vs
+    cw.chart.zoom(1 / 1.35)
+    check(cw.chart.vc < vc0, "pulsante + avvicina")
+    cw.chart.zoom(1.35 * 1.35)
+    check(cw.chart.vc > vc0 or cw.chart.vc == len(cw.chart.bars), "pulsante − allontana")
+    QTest.mouseDClick(cw.chart, Qt.LeftButton, pos=QPoint(300, 200))
+    check((cw.chart.vc, cw.chart.vs) == (vc0, vs0), "doppio clic sul grafico torna all'operazione")
     cw.chart.mouse = QPointF(500, 200)
     cw.grab().save(str(TMP / "grafico_aperta.png"))
 
@@ -217,6 +234,10 @@ def main():
     tr = cw.selected()
     check(tr and tr.key == 200 and not tr.is_open and tr.exit_price == 1998.5 and tr.profit == 4.5,
           "chiusura in diretta mostrata", tr)
+    i0 = cw.chart._index(cw.chart.trade.entry_time)
+    i1 = cw.chart._index(cw.chart.trade.exit_time)
+    check(cw.chart.vs <= i0 and i1 < cw.chart.vs + cw.chart.vc, "dopo la chiusura si vedono entrata e uscita",
+          (cw.chart.vs, cw.chart.vc, i0, i1))
     cw.grab().save(str(TMP / "grafico_chiusa_live.png"))
     cw.close()
 
