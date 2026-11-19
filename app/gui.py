@@ -226,10 +226,12 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.cellDoubleClicked.connect(self.open_chart)
         pos.addWidget(self.table, 1)
         self.empty_lbl = _label("Nessuna operazione aperta", "muted")
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         pos.addWidget(self.empty_lbl, 1)
+        self.empty_lbl.mouseDoubleClickEvent = lambda _e: self.open_chart(-1)
         actions = QHBoxLayout()
         actions.setSpacing(6)
         actions.addWidget(_label("Selezionate", "muted"))
@@ -339,6 +341,12 @@ class MainWindow(QMainWindow):
                 self.table.selectRow(r)
         self.empty_lbl.setVisible(not rows)
         self.table.setVisible(bool(rows))
+
+    def open_chart(self, row, _col=0):
+        """Doppio clic su un'operazione: apre il grafico con entrata, uscita, SL e TP."""
+        from .chart import ChartWindow
+        item = self.table.item(row, 0) if row >= 0 else None
+        ChartWindow.show_for(self, self.engine, int(item.text()) if item else None)
 
     def selected_tickets(self):
         return sorted({int(self.table.item(i.row(), 0).text()) for i in self.table.selectionModel().selectedRows()})

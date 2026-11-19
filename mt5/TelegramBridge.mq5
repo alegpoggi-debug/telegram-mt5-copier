@@ -14,6 +14,7 @@ input int TimerMs = 200;   // Frequenza di controllo comandi (ms)
 
 CTrade trade;
 string DIR = "TGBridge\\";
+string g_cmdId = "";   // id del comando in corso (per i file di dati del grafico)
 int    g_stateTicks = 0;
 int    g_symbolTicks = 0;
 
@@ -166,6 +167,7 @@ void HandleCommand(const string fileName)
    // id = parte tra "cmd_" e ".txt"
    string id = StringSubstr(fileName, 4, StringLen(fileName) - 8);
    ResetResult();
+   g_cmdId = id;
 
    if(!ReadKV(path))
      {
@@ -185,6 +187,10 @@ void HandleCommand(const string fileName)
       DoCancel();
    else if(action == "QUOTE")
       DoQuote();
+   else if(action == "RATES")
+      DoRates();
+   else if(action == "HISTORY")
+      DoHistory();
    else if(action == "PING")
      {
       r_ok = true;
@@ -587,5 +593,118 @@ void WriteSymbols()
       FileWriteString(fh, SymbolName(i, false) + "\n");
    FileClose(fh);
    FileMove(tmp, FILE_COMMON, DIR + "symbols.txt", FILE_COMMON | FILE_REWRITE);
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| GRAFICO: candele (RATES) e storico operazioni (HISTORY)           |
+//| I dati vanno in data_<id>.txt, il nome del file nel campo msg.    |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES TfFromString(const string tf)
+  {
+   if(tf == "M1")
+      return(PERIOD_M1);
+   if(tf == "M5")
+      return(PERIOD_M5);
+   if(tf == "M15")
+      return(PERIOD_M15);
+   if(tf == "M30")
+      return(PERIOD_M30);
+   if(tf == "H1")
+      return(PERIOD_H1);
+   if(tf == "H4")
+      return(PERIOD_H4);
+   if(tf == "D1")
+      return(PERIOD_D1);
+   return(PERIOD_M5);
+  }
+
+void DoRates()
+  {
+   string sym = Get("symbol");
+   ENUM_TIMEFRAMES tf = TfFromString(Get("tf"));
+   datetime from = (datetime)GetL("from", 0);
+   datetime to = (datetime)GetL("to", 0);
+   if(to <= 0)
+      to = TimeCurrent();
+   r_price = (double)TimeCurrent();
+   if(!SymbolSelect(sym, true))
+     {
+      r_msg = "simbolo non disponibile: " + sym;
+      return;
+     }
+   MqlRates rates[];
+   int n = CopyRates(sym, tf, from, to, rates);
+   if(n <= 0)
+     {
+      r_msg = "candele non ancora disponibili (" + IntegerToString(GetLastError()) + ")";
+      return;
+     }
+   string fname = "data_" + g_cmdId + ".txt";
+   int fh = FileOpen(DIR + fname, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(fh == INVALID_HANDLE)
+     {
+      r_msg = "impossibile scrivere i dati del grafico";
+      return;
+     }
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   int start = (n > 3000) ? n - 3000 : 0;
+   for(int i = start; i < n; i++)
+      FileWriteString(fh, IntegerToString((long)rates[i].time) + "|" + DoubleToString(rates[i].open, digits) + "|" +
+                      DoubleToString(rates[i].high, digits) + "|" + DoubleToString(rates[i].low, digits) + "|" +
+                      DoubleToString(rates[i].close, digits) + "\n");
+   FileClose(fh);
+   r_ok = true;
+   r_msg = fname;
+   r_volume = n - start;
+  }
+
+void DoHistory()
+  {
+   long days = GetL("days", 30);
+   datetime now = TimeCurrent();
+   datetime from = (datetime)((long)now - days * 86400);
+   datetime to = (datetime)((long)now + 86400);
+   r_price = (double)now;
+   if(!HistorySelect(from, to))
+     {
+      r_msg = "storico non disponibile";
+      return;
+     }
+   string fname = "data_" + g_cmdId + ".txt";
+   int fh = FileOpen(DIR + fname, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(fh == INVALID_HANDLE)
+     {
+      r_msg = "impossibile scrivere lo storico";
+      return;
+     }
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      ulong d = HistoryDealGetTicket(i);
+      if(d == 0)
+         continue;
+      long type = HistoryDealGetInteger(d, DEAL_TYPE);
+      if(type != DEAL_TYPE_BUY && type != DEAL_TYPE_SELL)
+         continue;
+      string sym = HistoryDealGetString(d, DEAL_SYMBOL);
+      int dg = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      double profit = HistoryDealGetDouble(d, DEAL_PROFIT) + HistoryDealGetDouble(d, DEAL_COMMISSION) +
+                      HistoryDealGetDouble(d, DEAL_SWAP);
+      FileWriteString(fh, "deal|" + IntegerToString((long)d) + "|" +
+                      IntegerToString(HistoryDealGetInteger(d, DEAL_POSITION_ID)) + "|" +
+                      IntegerToString(HistoryDealGetInteger(d, DEAL_TIME)) + "|" +
+                      IntegerToString(type) + "|" +
+                      IntegerToString(HistoryDealGetInteger(d, DEAL_ENTRY)) + "|" +
+                      DoubleToString(HistoryDealGetDouble(d, DEAL_PRICE), dg) + "|" +
+                      DoubleToString(HistoryDealGetDouble(d, DEAL_VOLUME), 2) + "|" +
+                      DoubleToString(profit, 2) + "|" + sym + "|" +
+                      IntegerToString(HistoryDealGetInteger(d, DEAL_MAGIC)) + "|" +
+                      Clean(HistoryDealGetString(d, DEAL_COMMENT)) + "\n");
+     }
+   FileClose(fh);
+   r_ok = true;
+   r_msg = fname;
+   r_volume = total;
   }
 //+------------------------------------------------------------------+
