@@ -125,7 +125,18 @@ def main():
     d.sw_be.setChecked(True)
     d.cb_tphit.setCurrentIndex(d.cb_tphit.findData("breakeven"))
     d.sw_hours.setChecked(False)
+    check(d.zone_wrap.isHidden(), "opzioni della fascia nascoste se spenta")
+    d.sw_zone.setChecked(True)
+    check(not d.zone_wrap.isHidden(), "opzioni della fascia visibili se accesa")
+    d.sp_zone_sec.setValue(20)
+    d.sp_zone_margin.setValue(15)
+    d.sp_spread.setValue(40)
+    d.sp_slip.setValue(25)
     d.save()
+    s2 = eng.settings.get()
+    check((s2["zone_wait"], s2["zone_wait_seconds"], s2["zone_margin_points"], s2["max_spread_points"],
+           s2["slippage_points"]) == (True, 20, 15, 40, 25), "impostazioni ENTRATA salvate")
+    d = gui.SettingsDialog(win, eng, "Trading")
     s = eng.settings.get()
     exp = {"lot_mode": "fixed", "fixed_lot": 0.07, "risk_percent": 2.0, "risk_money": 25.0, "dry_run": True,
            "allow_real": False, "max_lot_per_trade": 0.5, "max_open_trades": 8, "multi_tp_mode": "first",
@@ -247,6 +258,11 @@ def main():
         d.show()
         QTest.qWait(100)
         d.grab().save(str(TMP / f"set_{page.split()[0]}.png"))
+        if page == "Trading":
+            sc = d.stack.currentWidget()
+            sc.verticalScrollBar().setValue(sc.verticalScrollBar().maximum() // 2 + 150)
+            QTest.qWait(100)
+            d.grab().save(str(TMP / "set_Trading_entrata.png"))
         d.reject()
     print(f"TUTTI I {len(PASSED)} TEST DELL'INTERFACCIA SUPERATI")
     print("screenshot:", TMP)

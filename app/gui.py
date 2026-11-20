@@ -873,6 +873,48 @@ class SettingsDialog(QDialog):
         self.slpts_wrap.setVisible(s["no_sl_mode"] == "default")
         lay.addWidget(c3)
 
+        # entrata: slippage, fascia di prezzo, spread
+        c6, l6 = _card(spacing=14)
+        l6.addWidget(_label("ENTRATA", "section"))
+        self.sw_zone = Switch(s["zone_wait"])
+        self._row(l6, "Aspetta il prezzo nella fascia", "Se il segnale indica due prezzi (es. 2345–2350) e il prezzo "
+                  "attuale è fuori, aspetta che rientri. Se non rientra in tempo, il segnale viene ignorato.", self.sw_zone)
+        self.sp_zone_sec = QSpinBox()
+        self.sp_zone_sec.setRange(0, 3600)
+        self.sp_zone_sec.setSuffix(" secondi")
+        self.sp_zone_sec.setValue(s["zone_wait_seconds"])
+        _clean_spin(self.sp_zone_sec)
+        self.sp_zone_margin = QSpinBox()
+        self.sp_zone_margin.setRange(0, 100000)
+        self.sp_zone_margin.setSuffix(" punti")
+        self.sp_zone_margin.setValue(s["zone_margin_points"])
+        _clean_spin(self.sp_zone_margin)
+        self.zone_wrap = QWidget()
+        zw = QVBoxLayout(self.zone_wrap)
+        zw.setContentsMargins(0, 0, 0, 0)
+        zw.setSpacing(14)
+        self._row(zw, "Tempo massimo di attesa", "Quanto aspettare che il prezzo rientri. 0 = non aspetta.", self.sp_zone_sec)
+        self._row(zw, "Margine fuori fascia", "Accetta anche un prezzo appena fuori dalla fascia. 0 = solo dentro.",
+                  self.sp_zone_margin)
+        l6.addWidget(self.zone_wrap)
+        self.sw_zone.toggled.connect(self.zone_wrap.setVisible)
+        self.zone_wrap.setVisible(s["zone_wait"])
+        self.sp_spread = QSpinBox()
+        self.sp_spread.setRange(0, 100000)
+        self.sp_spread.setSuffix(" punti")
+        self.sp_spread.setValue(s["max_spread_points"])
+        _clean_spin(self.sp_spread)
+        self._row(l6, "Spread massimo", "Con lo spread più alto non entra (aspetta come sopra). 0 = nessun limite.",
+                  self.sp_spread)
+        self.sp_slip = QSpinBox()
+        self.sp_slip.setRange(0, 100000)
+        self.sp_slip.setSuffix(" punti")
+        self.sp_slip.setValue(s["slippage_points"])
+        _clean_spin(self.sp_slip)
+        self._row(l6, "Slippage massimo", "Scostamento massimo accettato nel momento dell'esecuzione. Alcuni broker "
+                  "eseguono comunque al prezzo di mercato.", self.sp_slip)
+        lay.addWidget(c6)
+
         # gestione
         c4, l4 = _card(spacing=14)
         l4.addWidget(_label("GESTIONE", "section"))
@@ -960,6 +1002,11 @@ class SettingsDialog(QDialog):
             "hours_enabled": self.sw_hours.isChecked(),
             "hours_start": self.tm_start.time().toString("HH:mm"),
             "hours_end": self.tm_end.time().toString("HH:mm"),
+            "zone_wait": self.sw_zone.isChecked(),
+            "zone_wait_seconds": self.sp_zone_sec.value(),
+            "zone_margin_points": self.sp_zone_margin.value(),
+            "max_spread_points": self.sp_spread.value(),
+            "slippage_points": self.sp_slip.value(),
         }
 
     # ------------------------------------------------------------ prova messaggio

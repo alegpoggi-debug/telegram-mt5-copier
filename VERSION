@@ -1,3 +1,3 @@
-2.9
-Grafico più leggibile: le candele occupano tutta l altezza, SL e TP lontani restano sul bordo, vista centrata sull operazione.
-Pulsanti − / + e «Adatta» per lo zoom, finestra più grande. Il ponte non va aggiornato.
+3.0
+Nuovo in Impostazioni → Trading → ENTRATA: aspetta che il prezzo rientri nella fascia del segnale (tempo a scelta), spread massimo e slippage massimo.
+Il ponte non va aggiornato.

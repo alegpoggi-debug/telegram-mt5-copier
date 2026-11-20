@@ -622,6 +622,9 @@ class Engine:
         err = self._ready(s, opening=True)
         if err:
             return [f"NON eseguito: {err}"]
+        why = await self._entry_gate(r, orders[0], s)
+        if why:
+            return [f"NON eseguito: {why}"]
         out = []
         for o in orders:
             o["comment"] = f"TG#{key}" if key else "TG#manuale"
@@ -642,6 +645,60 @@ class Engine:
             else:
                 out.append(f"RIFIUTATO {desc}: {res.get('msg')} (codice {res.get('retcode')})")
         return out
+
+    async def _quote(self, symbol):
+        """Prezzo attuale da MetaTrader: (bid, ask, point) oppure None."""
+        try:
+            res = await self.bridge.send({"action": "QUOTE", "symbol": symbol}, timeout=5)
+        except BridgeError:
+            return None
+        if res.get("ok") != "1":
+            return None
+        m = re.search(r"ask:([\d.]+)\s+point:([\d.eE-]+)", res.get("msg", ""))
+        if not m:
+            return None
+        return float(res.get("price") or 0), float(m.group(1)), float(m.group(2))
+
+    async def _entry_gate(self, r, order, s) -> str | None:
+        """Fascia di entrata e spread. None = si può entrare, altrimenti il motivo per non entrare.
+
+        Se il prezzo è fuori dalla fascia del segnale (o lo spread è troppo alto) aspetta fino al tempo
+        scelto, controllando ogni mezzo secondo; se non rientra, il segnale viene lasciato perdere.
+        """
+        zone = s["zone_wait"] and r.get("entry") is not None and r.get("entry2") is not None and not s["reverse"]
+        spread_limit = s["max_spread_points"]
+        if order["otype"] != "MARKET" or not (zone or spread_limit):
+            return None
+        if self.bridge is None or not self.mt5_connected():
+            return None if s["dry_run"] else "MetaTrader non collegato"
+        lo, hi = (sorted((r["entry"], r["entry2"])) if zone else (None, None))
+        buy = order["side"] == "BUY"
+        wait = max(0, int(s["zone_wait_seconds"]))
+        deadline = time.monotonic() + wait
+        told = False
+        last_problem = "prezzo non disponibile"
+        while True:
+            q = await self._quote(order["symbol"])
+            if q:
+                bid, ask, pt = q
+                price = ask if buy else bid
+                margin = s["zone_margin_points"] * pt
+                problems = []
+                if zone and not (lo - margin <= price <= hi + margin):
+                    problems.append(f"prezzo {price:g} fuori dalla fascia {lo:g}–{hi:g}")
+                if spread_limit and pt and (ask - bid) > spread_limit * pt + pt / 2:
+                    problems.append(f"spread {round((ask - bid) / pt)} punti (massimo {spread_limit})")
+                if not problems:
+                    if told:
+                        self.ui.on_log(f"  → prezzo {price:g} nella fascia: entro", "trade")
+                    return None
+                last_problem = " e ".join(problems)
+                if not told and wait:
+                    self.ui.on_log(f"  → {last_problem}: aspetto fino a {wait} secondi", "trade")
+                    told = True
+            if time.monotonic() >= deadline:
+                return f"{last_problem}" + (f" anche dopo {wait} secondi: segnale lasciato perdere" if wait else "")
+            await asyncio.sleep(0.5)
 
     # ================================================================ gestione
     def _find(self, ticket):
