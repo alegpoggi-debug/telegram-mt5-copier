@@ -80,6 +80,9 @@ class RSignal:
     exits: list = field(default_factory=list)
     edited: bool = False         # il canale ha modificato il messaggio dopo averlo inviato
     vpp: float | None = None     # valore di 1 punto con 1 lotto, in dollari (None = non stimabile)
+    vpp_acc: float | None = None  # valore esatto di 1 punto con 1 lotto nella valuta del conto (dati di MetaTrader)
+    lots: float = 1.0            # quante volte il lotto scelto viene usato (una posizione per TP)
+    swap_lot: float | None = None  # swap totale con 1 lotto, valuta del conto (None = non noto)
 
 
 @dataclass
@@ -107,6 +110,7 @@ class Report:
     usd_to_acc: float | None = None                  # 1 dollaro in valuta del conto
     currency: str = "USD"
     note: str = ""
+    precise: bool = False                            # spread storico e dati esatti del simbolo dal ponte
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -198,21 +202,39 @@ def _blocked(s, side, symbol, utc_ts) -> str | None:
     return None
 
 
+EXEC_DELAY = 1   # secondi tra il messaggio e l'ordine nella copia vera
+
+
 def price_at(bars, times, t):
     """Prezzo (bid) stimato in un istante: interpolato dentro la candela al minuto che lo contiene."""
     i = bisect.bisect_right(times, t) - 1
     if i < 0 or t - times[i] >= 120:
         return None, None
-    _bt, o, _h, _l, c = bars[i]
+    o, c = bars[i][1], bars[i][4]
     frac = min(1.0, max(0.0, (t - times[i]) / 60))
     return o + (c - o) * frac, i
 
 
-def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: float = 0.0, point: float | None = None):
+def _nights(t1, t2, swap3):
+    """Notti di swap tra due istanti (ora del broker). swap3: giorno del triplo (0=domenica … 6=sabato)."""
+    n = 0
+    d = (int(t1) // 86400 + 1) * 86400          # prima mezzanotte dopo l'entrata
+    while d <= t2:
+        day_before = dt.datetime.fromtimestamp(d - 1, dt.timezone.utc)
+        mql_wd = (day_before.weekday() + 1) % 7   # lunedì=1 … domenica=0
+        if 1 <= mql_wd <= 5:
+            n += 3 if mql_wd == swap3 else 1
+        d += 86400
+    return n
+
+
+def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: float = 0.0, point: float | None = None,
+                    spec: dict | None = None, max_positions: int | None = None):
     """Simula un segnale sulle candele M1 (prezzi bid, come in MetaTrader).
 
-    spread: spread in prezzo (i BUY comprano a bid+spread, i SELL chiudono a bid+spread).
-    events: [(ora broker, tipo, parametri)] dei messaggi di gestione per questo segnale.
+    spread: spread di riserva (se le candele non hanno quello storico). Dentro ogni minuto il prezzo
+    segue il percorso apertura → minimo → massimo → chiusura (o massimo prima del minimo se la candela
+    è ribassista), come il Tester di MetaTrader: così si sa se arriva prima lo SL o il TP.
     """
     if not bars:
         sig.status = "senza prezzi"
@@ -220,20 +242,26 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
     times = [b[0] for b in bars]
     pt = point or _point(bars)
     side = 1 if sig.side == "buy" else -1
-    sp = spread
     buy = side > 0
 
+    def sp(j):
+        b = bars[j]
+        return b[5] * pt if len(b) > 5 and b[5] > 0 else spread
+
+    t_exec = sig.t + EXEC_DELAY
     # ---- entrata
     if sig.otype == "market":
-        bid, i = price_at(bars, times, sig.t)
+        bid, i = price_at(bars, times, t_exec)
         if bid is None:                         # messaggio in un momento senza prezzi (es. mercato chiuso)
             i = bisect.bisect_left(times, sig.t)
             if i >= len(bars) or bars[i][0] - sig.t > 3 * 3600:
                 sig.status = "senza prezzi"
                 return
-            bid = bars[i][1]
-        first_check = i + 1                     # le escursioni della candela d'entrata erano (in parte) prima
-        price = bid + sp if buy else bid
+            bid, entry_t = bars[i][1], bars[i][0]
+        else:
+            entry_t = t_exec
+        first_check = i + 1
+        price = bid + sp(i) if buy else bid
         if s["zone_wait"] and sig.entry is not None and sig.entry2 is not None and not s["reverse"]:
             lo, hi = sorted((sig.entry, sig.entry2))
             m = s["zone_margin_points"] * pt
@@ -241,42 +269,41 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
                 deadline = sig.t + max(0, s["zone_wait_seconds"])
                 found = None
                 for j in range(i + 1, len(bars)):
-                    t, _o, h, l_, _c = bars[j]
-                    if t > deadline:
+                    if bars[j][0] > deadline:
                         break
-                    hh, ll = (h + sp, l_ + sp) if buy else (h, l_)
-                    if hh >= lo - m and ll <= hi + m:
+                    add = sp(j) if buy else 0.0
+                    if bars[j][2] + add >= lo - m and bars[j][3] + add <= hi + m:
                         found = (j, hi + m if price > hi + m else lo - m)
                         break
                 if not found:
                     sig.status = "ignorato: prezzo fuori dalla fascia"
                     return
-                first_check = found[0]
-                price = found[1]
-        entry_t, entry_p = (sig.t if first_check == i + 1 else bars[first_check][0]), price
+                first_check, price, entry_t = found[0], found[1], bars[found[0]][0]
+        entry_p = price
     else:
         e = sig.entry
-        expiry = (s["pending_expiry_min"] or 24 * 60) * 60
+        expiry = s["pending_expiry_min"] * 60 if s["pending_expiry_min"] else None   # 0 = mai (come la copia)
         cancels = sorted(t for t, k, _p in events if k == "cancel")
         found = None
         for j in range(bisect.bisect_left(times, sig.t), len(bars)):
-            t, o, h, l_, c = bars[j]
-            if t - sig.t > expiry or any(ct <= t for ct in cancels):
+            t, o, h, l_ = bars[j][:4]
+            if (expiry is not None and t - sig.t > expiry) or any(ct <= t for ct in cancels) or t - sig.t > HORIZON:
                 break
-            hh, ll, oo = (h + sp, l_ + sp, o + sp) if buy else (h, l_, o)   # i BUY si eseguono all'ask
+            add = sp(j) if buy else 0.0                 # i BUY si eseguono all'ask
+            hh, ll, oo = h + add, l_ + add, o + add
             if sig.otype == "limit":
                 hit = ll <= e if buy else hh >= e
-                fill = min(oo, e) if buy else max(oo, e)   # se il prezzo apre già oltre, esegue all'apertura (meglio)
+                fill = min(oo, e) if buy else max(oo, e)
             else:
                 hit = hh >= e if buy else ll <= e
-                fill = max(oo, e) if buy else min(oo, e)   # stop: esegue all'apertura se c'è un salto (peggio)
+                fill = max(oo, e) if buy else min(oo, e)
             if hit:
                 found = (j, fill)
                 break
         if found is None:
             sig.status = "ordine mai eseguito"
             return
-        first_check = found[0]
+        first_check = found[0] + 1
         entry_t, entry_p = bars[found[0]][0], found[1]
     sig.entry_t, sig.entry_p = entry_t, entry_p
 
@@ -300,18 +327,37 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             tps = [tps[min(max(1, s["tp_index"]) - 1, len(tps) - 1)]]
     if not tps:
         tps = [entry_p + side * s["default_tp_points"] * pt] if (s["no_tp_mode"] == "default" or s["reverse"]) else [None]
+    if max_positions is not None:
+        tps = tps[:max(1, max_positions)]        # come la copia: oltre il limite si tagliano i TP in eccesso
     if sl is not None and s["sl_adjust_points"]:
         sl -= side * s["sl_adjust_points"] * pt
     tps = [tp - side * s["tp_adjust_points"] * pt if (tp is not None and s["tp_adjust_points"]) else tp for tp in tps]
     weights = _weights(len(tps), s)
     subs = [{"tp": tp, "sl": sl, "w": w, "open": w, "pnl": 0.0, "exit": None} for tp, w in zip(tps, weights)]
+    sig.lots = sum(weights)
+    sig.n_pos = len(subs)
     sig.tp_first = next((tp for tp in tps if tp is not None), None)
     be_price = entry_p + side * s["be_offset_points"] * pt
 
+    # swap per notte con 1 lotto (valuta del conto)
+    swap_night = None
+    if spec and spec.get("vpp_acc"):
+        rate = spec["swap_long"] if buy else spec["swap_short"]
+        if spec.get("swap_mode") == 1:
+            swap_night = rate * spec["vpp_acc"]
+        elif spec.get("swap_mode") == 4:
+            swap_night = rate
+        elif spec.get("swap_mode") == 0:
+            swap_night = 0.0
+    swap_total = 0.0
+
     def close(sub, frac_w, exit_price, t):
+        nonlocal swap_total
         sub["pnl"] += (exit_price - entry_p) * side / pt * frac_w
         sub["open"] -= frac_w
-        sig.exits.append((t, round(exit_price, 6)))
+        sig.exits.append((int(t), round(exit_price, 6)))
+        if swap_night is not None:
+            swap_total += swap_night * frac_w * _nights(entry_t, t, spec.get("swap3", 3))
         if sub["open"] <= 1e-9:
             sub["open"] = 0.0
             sub["exit"] = (t, exit_price)
@@ -321,19 +367,72 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             if sub["open"] > 0 and (sub["sl"] is None or (buy and sub["sl"] < be_price) or (not buy and sub["sl"] > be_price)):
                 sub["sl"] = be_price
 
+    def walk(j):
+        """Percorso del prezzo dentro la candela j: SL e TP nell'ordine in cui vengono toccati."""
+        t, o, h, l_, c = bars[j][:5]
+        spj = sp(j)
+        hit_tp = False
+
+        def trig(sub, kind):            # livello in prezzo bid: i SELL chiudono all'ask (bid + spread)
+            lv = sub[kind]
+            return None if lv is None else (lv if buy else lv - spj)
+        for sub in subs:                # salto in apertura oltre SL o TP
+            if sub["open"] <= 0:
+                continue
+            slb, tpb = trig(sub, "sl"), trig(sub, "tp")
+            px = o if buy else o + spj
+            if slb is not None and ((buy and o <= slb) or (not buy and o >= slb)):
+                close(sub, sub["open"], px, t)
+            elif tpb is not None and ((buy and o >= tpb) or (not buy and o <= tpb)):
+                close(sub, sub["open"], px, t)
+                hit_tp = True
+        if hit_tp and s["be_on_tp1"]:
+            to_be()
+        path = [o, l_, h, c] if c >= o else [o, h, l_, c]
+        for seg in range(3):
+            a, b = path[seg], path[seg + 1]
+            start = 0.0
+            while True:
+                best = None
+                for sub in subs:
+                    if sub["open"] <= 0:
+                        continue
+                    for kind in ("sl", "tp"):
+                        lv = trig(sub, kind)
+                        if lv is None:
+                            continue
+                        falling = (kind == "sl") == buy      # SL dei BUY e TP dei SELL scattano con il prezzo in discesa
+                        crossed = (b <= lv < a) if falling else (a < lv <= b)
+                        if not crossed:
+                            continue
+                        f = (a - lv) / (a - b) if a != b else 0.0
+                        if f + 1e-12 >= start and (best is None or f < best[0] - 1e-12 or
+                                                   (abs(f - best[0]) <= 1e-12 and kind == "sl")):
+                            best = (f, sub, kind)
+                if best is None:
+                    break
+                f, sub, kind = best
+                close(sub, sub["open"], sub[kind], t + int(20 * (seg + f)))
+                if kind == "tp" and s["be_on_tp1"]:
+                    to_be()
+                start = f
+
     ev = sorted(e for e in events if e[0] >= sig.t and e[1] != "cancel")
     k = 0
     end_t = sig.t + HORIZON
-    last = None
+    last_j = None
     for j in range(first_check, len(bars)):
-        t, o, h, l_, c = bars[j]
+        t = bars[j][0]
         if t > end_t:
             break
-        last = bars[j]
-        exit_o = o if buy else o + sp            # prezzo di chiusura a mercato: i BUY vendono al bid, i SELL ricomprano all'ask
+        last_j = j
         while k < len(ev) and ev[k][0] < t:      # messaggi del canale arrivati prima di questa candela
-            _et, kind, prm = ev[k]
+            et, kind, prm = ev[k]
             k += 1
+            pb, pj = price_at(bars, times, et + EXEC_DELAY)
+            if pb is None:
+                pb, pj = bars[j][1], j
+            exit_px = pb if buy else pb + sp(pj)  # chiusura a mercato nel momento del messaggio
             if kind == "breakeven":
                 to_be()
             elif kind == "move_sl":
@@ -343,48 +442,39 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             elif kind == "close":
                 for sub in subs:
                     if sub["open"] > 0:
-                        close(sub, sub["open"], exit_o, t)
+                        close(sub, sub["open"], exit_px, et + EXEC_DELAY)
             elif kind == "partial":
                 pct, also_be = prm
                 for sub in subs:
                     if sub["open"] > 0:
-                        close(sub, sub["open"] * pct / 100, exit_o, t)
+                        close(sub, sub["open"] * pct / 100, exit_px, et + EXEC_DELAY)
                 if also_be:
                     to_be()
-        hh, ll, oo = (h, l_, o) if buy else (h + sp, l_ + sp, o + sp)    # prezzo che fa scattare SL/TP
-        hit_tp = False
-        for sub in subs:
-            if sub["open"] <= 0:
-                continue
-            slv, tpv = sub["sl"], sub["tp"]
-            if slv is not None and ((buy and ll <= slv) or (not buy and hh >= slv)):
-                gap = (buy and oo < slv) or (not buy and oo > slv)
-                close(sub, sub["open"], oo if gap else slv, t)        # salto oltre lo SL: chiude al prezzo peggiore
-            elif tpv is not None and ((buy and hh >= tpv) or (not buy and ll <= tpv)):
-                gap = (buy and oo > tpv) or (not buy and oo < tpv)
-                close(sub, sub["open"], oo if gap else tpv, t)        # salto oltre il TP: chiude al prezzo migliore
-                hit_tp = True
-        if hit_tp and s["be_on_tp1"]:
-            to_be()
+        walk(j)
         if all(sub["open"] <= 0 for sub in subs):
             break
 
     still_open = any(sub["open"] > 0 for sub in subs)
     total = sum(sub["pnl"] for sub in subs)
-    if still_open and last is not None:
-        now_p = last[4] if buy else last[4] + sp
+    if still_open and last_j is not None:
+        last = bars[last_j]
+        now_p = last[4] if buy else last[4] + sp(last_j)
         total += sum((now_p - entry_p) * side / pt * sub["open"] for sub in subs if sub["open"] > 0)
+        if swap_night is not None:
+            swap_total += swap_night * sum(sub["open"] for sub in subs) * _nights(entry_t, last[0], spec.get("swap3", 3))
     sig.points = round(total, 1)
+    sig.swap_lot = round(swap_total, 4) if swap_night is not None else None
     sig.sl_now = next((sub["sl"] for sub in subs if sub["sl"] is not None), None)
     if still_open:
         sig.status = "aperto"
-        sig.exit_t, sig.exit_p = (last[0], last[4]) if last else (None, None)
+        sig.exit_t, sig.exit_p = (bars[last_j][0], bars[last_j][4]) if last_j is not None else (None, None)
     else:
         sig.exit_t = max(sub["exit"][0] for sub in subs if sub["exit"])
         tot_w = sum(sub["w"] for sub in subs) or 1
         sig.exit_p = sum(sub["exit"][1] * sub["w"] for sub in subs if sub["exit"]) / tot_w
         sig.status = "vinto" if sig.points > 0.5 else ("perso" if sig.points < -0.5 else "pareggio")
     sig.vpp = value_per_point(sig.symbol, pt, entry_p)
+    sig.vpp_acc = spec.get("vpp_acc") if spec else None
 
 
 def calibrate_offset(messages, s, resolve, rates_for) -> int:
@@ -422,12 +512,12 @@ def calibrate_offset(messages, s, resolve, rates_for) -> int:
 
 
 def analyze(messages: list[dict], s: dict, resolve, rates_for, spreads: dict | None = None,
-            points: dict | None = None) -> tuple[list, list, dict, list]:
+            points: dict | None = None, specs: dict | None = None) -> tuple[list, list, dict, list]:
     """messages: [{id, t (ora broker), utc, text, reply_to, edited}] in ordine di tempo.
     resolve(raw) → simbolo del broker o None.   rates_for(symbol) → candele M1 [(t,o,h,l,c)].
     spreads / points: per simbolo, in prezzo (dati letti da MetaTrader).
     """
-    spreads, points = spreads or {}, points or {}
+    spreads, points, specs = spreads or {}, points or {}, specs or {}
     signals: list[RSignal] = []
     rmsgs: list[RMessage] = []
     events: dict[int, list] = {}
@@ -528,26 +618,67 @@ def analyze(messages: list[dict], s: dict, resolve, rates_for, spreads: dict | N
                 events.setdefault(tgt.msg_id, []).append((m["t"], kk, prm))
         rm.note = "gestione" if evs else "nessuna azione"
 
+    def sim(sig, max_positions=None):
+        simulate_signal(sig, rates_for(sig.symbol), events.get(sig.msg_id, []), s, spread=spreads.get(sig.symbol, 0.0),
+                        point=points.get(sig.symbol), spec=specs.get(sig.symbol), max_positions=max_positions)
+
     for sig in signals:
-        if sig.status:
+        if not sig.status:
+            sim(sig)
+
+    # limiti di posizioni aperte delle impostazioni (totali e per simbolo), in ordine di tempo come la copia vera
+    limited = 0
+    accepted = []          # (inizio, fine, simbolo, posizioni)
+    for sig in sorted(signals, key=lambda x: x.t):
+        if sig.status not in ("vinto", "perso", "pareggio", "aperto"):
             continue
-        simulate_signal(sig, rates_for(sig.symbol), events.get(sig.msg_id, []), s,
-                        spread=spreads.get(sig.symbol, 0.0), point=points.get(sig.symbol))
+        n = getattr(sig, "n_pos", 1)
+        start = sig.t
+        active = [a for a in accepted if a[1] is None or a[1] > start]
+        free = min(s["max_open_trades"] - sum(a[3] for a in active),
+                   s["max_trades_per_symbol"] - sum(a[3] for a in active if a[2] == sig.symbol))
+        if free <= 0:
+            for f in ("entry_t", "entry_p", "exit_t", "exit_p", "vpp", "vpp_acc", "swap_lot"):
+                setattr(sig, f, None)
+            sig.points, sig.exits = 0.0, []
+            sig.status = "ignorato: troppe posizioni aperte"
+            limited += 1
+            continue
+        if free < n:
+            sig.status, sig.exits = "", []
+            sim(sig, max_positions=free)
+            n = free
+        accepted.append((start, None if sig.status == "aperto" else sig.exit_t, sig.symbol, n))
     stats, equity = summarize(signals, rmsgs, dups)
+    stats["limited"] = limited
     return signals, rmsgs, stats, equity
 
 
-def summarize(signals, rmsgs, dups, lot: float | None = None, usd_to_acc: float | None = None):
+def money_of(x, lot, usd_to_acc=None, commission=0.0):
+    """Risultato in denaro di un segnale (valuta del conto) con il lotto scelto: prezzo, swap e commissioni."""
+    if getattr(x, "vpp_acc", None) is not None:
+        v = x.vpp_acc
+    elif x.vpp is not None:
+        v = x.vpp * (usd_to_acc or 1.0)
+    else:
+        return None
+    lots = getattr(x, "lots", 1.0) or 1.0
+    swap = getattr(x, "swap_lot", None) or 0.0
+    return x.points * v * lot + swap * lot - commission * lot * lots
+
+
+def summarize(signals, rmsgs, dups, lot: float | None = None, usd_to_acc: float | None = None,
+              commission: float = 0.0):
     """Statistiche. Con `lot` (e valori per punto noti) calcola anche denaro, curva e calo massimo in denaro."""
     done = [x for x in signals if x.status in ("vinto", "perso", "pareggio", "aperto")]
     closed = [x for x in done if x.status != "aperto"]
     wins = [x for x in closed if x.status == "vinto"]
     losses = [x for x in closed if x.status == "perso"]
-    money_ok = lot is not None and done and all(x.vpp is not None for x in done)
+    money_ok = lot is not None and bool(done) and all(money_of(x, lot, usd_to_acc) is not None for x in done)
 
     def value(x):
         if money_ok:
-            return x.points * x.vpp * lot * (usd_to_acc or 1.0)
+            return money_of(x, lot, usd_to_acc, commission)
         return x.points
     equity, cum, peak, dd = [], 0.0, 0.0, 0.0
     streak = worst = 0
@@ -584,6 +715,23 @@ def summarize(signals, rmsgs, dups, lot: float | None = None, usd_to_acc: float 
 
 
 # ============================================================================ raccolta dati (asincrona)
+def parse_bars(text: str) -> list[tuple]:
+    """Candele dal ponte o dal disco: (tempo, apertura, massimo, minimo, chiusura[, spread in punti])."""
+    out = []
+    for line in text.splitlines():
+        p = line.strip().split("|")
+        if len(p) >= 5:
+            try:
+                b = (int(p[0]), float(p[1]), float(p[2]), float(p[3]), float(p[4]))
+                if len(p) >= 6 and p[5] != "":
+                    b = b + (int(float(p[5])),)
+                out.append(b)
+            except ValueError:
+                continue
+    out.sort(key=lambda b: b[0])
+    return out
+
+
 def _cache_path(symbol: str, day_start: int) -> Path:
     return CACHE_DIR / re.sub(r"[^A-Za-z0-9._-]", "_", symbol) / f"{day_start}.txt"
 
@@ -605,7 +753,7 @@ def save_prefs(**kw):
 
 async def scan(engine, cid: int, name: str, days: int, progress=lambda text: None) -> Report:
     """Analizza un canale degli ultimi `days` giorni. Non apre nessuna operazione."""
-    from .chart import fetch, parse_rates
+    from .chart import fetch
     s = engine.settings.get()
     generated = dt.datetime.now().strftime("%d/%m/%Y %H:%M")
 
@@ -644,13 +792,28 @@ async def scan(engine, cid: int, name: str, days: int, progress=lambda text: Non
             sym = engine.resolve_symbol(r["symbol"])
             if sym and sym not in symbols:
                 symbols.append(sym)
-    spreads, points, spread_pts = {}, {}, {}
+    spreads, points, spread_pts, specs = {}, {}, {}, {}
+    precise = True
     for sym in symbols:
+        text, err, _now = await fetch(engine.bridge, {"action": "SPEC", "symbol": sym})
+        if err:
+            precise = False                  # ponte non aggiornato: si usa il metodo base
+        else:
+            kv = dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
+            try:
+                pt = float(kv["point"])
+                tv, ts = float(kv["tick_value"]), float(kv["tick_size"])
+                specs[sym] = {"vpp_acc": tv * pt / ts if ts > 0 else None, "swap_long": float(kv["swap_long"]),
+                              "swap_short": float(kv["swap_short"]), "swap_mode": int(kv["swap_mode"]),
+                              "swap3": int(kv["swap3"]), "currency": kv.get("account_currency", "").strip()}
+                points[sym] = pt
+            except (KeyError, ValueError):
+                precise = False
         q = await engine._quote(sym)
         if q:
             bid, ask, pt = q
             if pt > 0:
-                points[sym] = pt
+                points.setdefault(sym, pt)
                 sp = max(0.0, ask - bid)
                 if sp > 200 * pt:          # spread anomalo (mercato chiuso): non lo uso
                     sp = 0.0
@@ -702,15 +865,26 @@ async def scan(engine, cid: int, name: str, days: int, progress=lambda text: Non
                 continue
             path = _cache_path(sym, d)
             if path.exists() and d < today_server:
-                bars += parse_rates(path.read_text())
-                continue
-            text, err, _now = await fetch(engine.bridge, {"action": "RATES", "symbol": sym, "tf": "M1",
-                                                          "from": d, "to": d + 86399})
-            day_bars = parse_rates(text or "")
+                cached = parse_bars(path.read_text())
+                # con il ponte aggiornato le candele salvate senza spread storico vengono riscaricate
+                if not (precise and cached and len(cached[0]) < 6):
+                    bars += cached
+                    continue
+            day_bars = []
+            if precise:
+                text, err, _now = await fetch(engine.bridge, {"action": "RATESX", "symbol": sym, "tf": "M1",
+                                                              "from": d, "to": d + 86399})
+                day_bars = parse_bars(text or "") if not err else []
+                if err and "Installa il ponte" in err:
+                    precise = False
+            if not precise:
+                text, err, _now = await fetch(engine.bridge, {"action": "RATES", "symbol": sym, "tf": "M1",
+                                                              "from": d, "to": d + 86399})
+                day_bars = parse_bars(text or "")
             weekend = dt.datetime.fromtimestamp(d, dt.timezone.utc).weekday() >= 5
             if d < today_server and (day_bars or weekend):
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("\n".join(f"{b[0]}|{b[1]}|{b[2]}|{b[3]}|{b[4]}" for b in day_bars))
+                path.write_text("\n".join("|".join(str(v) for v in b) for b in day_bars))
             bars += day_bars
         bars.sort(key=lambda b: b[0])
         dedup = []
@@ -731,7 +905,7 @@ async def scan(engine, cid: int, name: str, days: int, progress=lambda text: Non
 
     # 6) simulazione
     progress("Calcolo i risultati…")
-    signals, rmsgs, stats, equity = analyze(msgs, s, engine.resolve_symbol, rates_for, spreads, points)
+    signals, rmsgs, stats, equity = analyze(msgs, s, engine.resolve_symbol, rates_for, spreads, points, specs)
     acc = (engine.state or {}).get("account") or {}
     currency = acc.get("currency") or "USD"
     usd_to_acc = 1.0 if currency == "USD" else None
@@ -745,7 +919,10 @@ async def scan(engine, cid: int, name: str, days: int, progress=lambda text: Non
         q = await engine._quote(fx) if fx else None
         if q and q[0] > 0:
             usd_to_acc = (q[0] + q[1]) / 2
+    if specs and all(sp.get("vpp_acc") for sp in specs.values()):
+        currency = next(iter(specs.values())).get("currency") or currency
     rep = Report(cid, name, days, generated, signals, rmsgs, stats, equity, spreads=spread_pts,
-                 usd_to_acc=usd_to_acc, currency=currency if usd_to_acc else "USD", note=note)
+                 usd_to_acc=usd_to_acc, currency=currency if (usd_to_acc or specs) else "USD", note=note,
+                 precise=precise and bool(specs))
     save_report(rep)
     return rep

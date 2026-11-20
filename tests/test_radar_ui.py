@@ -131,6 +131,7 @@ class FakeEA(threading.Thread):
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "symbols.txt").write_text("XAUUSD.m\r\nEURUSD.m\r\n")
         self.rates_calls = 0
+        self.precise = True        # ponte aggiornato (comandi RATESX e SPEC)
 
     def run(self):
         while True:
@@ -146,7 +147,14 @@ class FakeEA(threading.Thread):
                     else:
                         bid = price(now_server)
                         res = {"ok": 1, "price": bid, "msg": f"ask:{bid + 0.25:.2f} point:0.01000000"}
-                if kv["action"] == "RATES":
+                if kv["action"] in ("RATESX", "SPEC") and not self.precise:
+                    res = {"ok": 0, "msg": f"azione sconosciuta: {kv['action']}", "price": now_server}
+                elif kv["action"] == "SPEC":
+                    (self.dir / f"data_{cid}.txt").write_text(
+                        "contract=100\ntick_value=0.92592593\ntick_size=0.01\npoint=0.01\ndigits=2\nswap_long=-30\n"
+                        "swap_short=10\nswap_mode=1\nswap3=3\naccount_currency=EUR\n")
+                    res = {"ok": 1, "msg": f"data_{cid}.txt", "price": now_server}
+                if kv["action"] == "RATES" or (kv["action"] == "RATESX" and self.precise):
                     self.rates_calls += 1
                     sec = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}[kv["tf"]]
                     start = int(kv["from"]) // sec * sec
@@ -155,7 +163,8 @@ class FakeEA(threading.Thread):
                     while t <= stop:
                         if dt.datetime.fromtimestamp(t, dt.timezone.utc).weekday() < 5 or True:
                             o, c = price(t), price(t + sec)
-                            lines.append(f"{t}|{o:.2f}|{max(o, c) + .3:.2f}|{min(o, c) - .3:.2f}|{c:.2f}")
+                            line = f"{t}|{o:.2f}|{max(o, c) + .3:.2f}|{min(o, c) - .3:.2f}|{c:.2f}"
+                            lines.append(line + ("|30" if kv["action"] == "RATESX" else ""))
                         t += sec
                     lines = lines[-3000:]
                     (self.dir / f"data_{cid}.txt").write_text("\r\n".join(lines) + "\r\n")
@@ -222,6 +231,21 @@ def main():
     check(rep.spreads == {"XAUUSD.m": 25} and "spread considerato: XAUUSD.m 25 punti" in rw.lbl_progress.text(),
           "spread reale letto da MetaTrader", (rep.spreads, rw.lbl_progress.text()))
     check(rep.currency == "EUR" and abs(rep.usd_to_acc - 1 / 1.08005) < 1e-6, "cambio dollaro/euro", rep.usd_to_acc)
+    check(rep.precise and "dati esatti dal ponte" in rw.lbl_progress.text(), "dati esatti dal ponte aggiornato")
+    done = [x for x in rep.signals if x.status in ("vinto", "perso", "pareggio", "aperto")]
+    check(all(abs(x.vpp_acc - 0.92592593) < 1e-9 for x in done), "valore del punto esatto in euro dal ponte")
+    check(all(x.swap_lot is not None for x in done), "swap calcolato (0 per le operazioni chiuse in giornata)")
+    check(all(abs((x.entry_p - x.entry) - 0.30) < 0.25 for x in done if x.side == "buy" and x.entry),
+          "BUY: entrata con lo spread storico (30 punti)")
+    # commissione: abbassa il risultato di 7 € × lotto × posizioni
+    rw.sp_lot.setValue(0.10)
+    base, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc, 0.0)
+    rw.sp_comm.setValue(7.0)
+    withc, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc, 7.0)
+    check(abs((base["money"] - withc["money"]) - 7.0 * 0.10 * len(done)) < 0.05, "commissione per lotto sottratta",
+          (base["money"], withc["money"]))
+    check(radar.prefs().get("commission") == 7.0, "commissione ricordata")
+    rw.sp_comm.setValue(0.0)
     # scelta del lotto: la stima in denaro cambia subito, i punti no
     rw.sp_lot.setValue(0.01)
     m1, _ = radar.summarize(rep.signals, rep.messages, 0, 0.01, rep.usd_to_acc)
@@ -249,6 +273,17 @@ def main():
     second_time = time.time() - t0
     check(ea.rates_calls - calls <= 3, "seconda analisi usa i prezzi salvati", ea.rates_calls - calls)
     print(f"   (prima analisi {first_time:.1f}s, seconda {second_time:.1f}s)")
+
+    # ponte non aggiornato: il Radar funziona lo stesso con il metodo base e lo dice
+    ea.precise = False
+    for f in (radar.CACHE_DIR).rglob("*.txt"):
+        f.unlink()
+    rw.btn_run.click()
+    wait_until(lambda: not rw.running, 60)
+    rep_old = rw.report
+    check(rep_old and not rep_old.precise and rep_old.stats["signals"] == 10, "funziona anche con il ponte vecchio")
+    check("aggiorna il ponte" in rw.lbl_progress.text(), "invito ad aggiornare il ponte", rw.lbl_progress.text())
+    ea.precise = True
 
     # report ricaricato alla riapertura (anche senza rianalizzare)
     rw.close()

@@ -191,6 +191,10 @@ void HandleCommand(const string fileName)
       DoRates();
    else if(action == "HISTORY")
       DoHistory();
+   else if(action == "RATESX")
+      DoRatesX();
+   else if(action == "SPEC")
+      DoSpec();
    else if(action == "PING")
      {
       r_ok = true;
@@ -706,5 +710,81 @@ void DoHistory()
    r_ok = true;
    r_msg = fname;
    r_volume = total;
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| RADAR: candele con lo spread storico (RATESX) e dati del simbolo  |
+//| (SPEC: valore del punto, contratto, swap) per stime più precise.  |
+//+------------------------------------------------------------------+
+void DoRatesX()
+  {
+   string sym = Get("symbol");
+   ENUM_TIMEFRAMES tf = TfFromString(Get("tf"));
+   datetime from = (datetime)GetL("from", 0);
+   datetime to = (datetime)GetL("to", 0);
+   if(to <= 0)
+      to = TimeCurrent();
+   r_price = (double)TimeCurrent();
+   if(!SymbolSelect(sym, true))
+     {
+      r_msg = "simbolo non disponibile: " + sym;
+      return;
+     }
+   MqlRates rates[];
+   int n = CopyRates(sym, tf, from, to, rates);
+   if(n <= 0)
+     {
+      r_msg = "candele non ancora disponibili (" + IntegerToString(GetLastError()) + ")";
+      return;
+     }
+   string fname = "data_" + g_cmdId + ".txt";
+   int fh = FileOpen(DIR + fname, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(fh == INVALID_HANDLE)
+     {
+      r_msg = "impossibile scrivere i dati del grafico";
+      return;
+     }
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   int start = (n > 3000) ? n - 3000 : 0;
+   for(int i = start; i < n; i++)
+      FileWriteString(fh, IntegerToString((long)rates[i].time) + "|" + DoubleToString(rates[i].open, digits) + "|" +
+                      DoubleToString(rates[i].high, digits) + "|" + DoubleToString(rates[i].low, digits) + "|" +
+                      DoubleToString(rates[i].close, digits) + "|" + IntegerToString(rates[i].spread) + "\n");
+   FileClose(fh);
+   r_ok = true;
+   r_msg = fname;
+   r_volume = n - start;
+  }
+
+void DoSpec()
+  {
+   string sym = Get("symbol");
+   r_price = (double)TimeCurrent();
+   if(!SymbolSelect(sym, true))
+     {
+      r_msg = "simbolo non disponibile: " + sym;
+      return;
+     }
+   string fname = "data_" + g_cmdId + ".txt";
+   int fh = FileOpen(DIR + fname, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(fh == INVALID_HANDLE)
+     {
+      r_msg = "impossibile scrivere i dati del simbolo";
+      return;
+     }
+   FileWriteString(fh, "contract=" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE), 8) + "\n");
+   FileWriteString(fh, "tick_value=" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE), 10) + "\n");
+   FileWriteString(fh, "tick_size=" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE), 10) + "\n");
+   FileWriteString(fh, "point=" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_POINT), 10) + "\n");
+   FileWriteString(fh, "digits=" + IntegerToString(SymbolInfoInteger(sym, SYMBOL_DIGITS)) + "\n");
+   FileWriteString(fh, "swap_long=" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_SWAP_LONG), 6) + "\n");
+   FileWriteString(fh, "swap_short=" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_SWAP_SHORT), 6) + "\n");
+   FileWriteString(fh, "swap_mode=" + IntegerToString(SymbolInfoInteger(sym, SYMBOL_SWAP_MODE)) + "\n");
+   FileWriteString(fh, "swap3=" + IntegerToString(SymbolInfoInteger(sym, SYMBOL_SWAP_ROLLOVER3DAYS)) + "\n");
+   FileWriteString(fh, "account_currency=" + AccountInfoString(ACCOUNT_CURRENCY) + "\n");
+   FileClose(fh);
+   r_ok = true;
+   r_msg = fname;
   }
 //+------------------------------------------------------------------+

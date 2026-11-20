@@ -2,6 +2,7 @@
 python -m tests.test_radar
 """
 import copy
+import datetime as dt
 import os
 import sys
 import tempfile
@@ -15,7 +16,7 @@ from app import radar  # noqa: E402
 from app.settings import DEFAULTS  # noqa: E402
 
 PASSED = []
-T0 = 1_763_000_000 // 86400 * 86400 + 3 * 86400 + 9 * 3600   # un giovedì alle 9:00 (ora del broker)
+T0 = 1_763_000_000 // 86400 * 86400 + 3 * 86400 + 9 * 3600   # una domenica alle 9:00 (ora del broker)
 
 
 def check(cond, name, detail=""):
@@ -45,10 +46,11 @@ def ramp(a, b, n):
     return [a + (b - a) * i / (n - 1) for i in range(n)]
 
 
-def run(msgs, s, bars, spread=0.0, resolve=lambda raw: "XAUUSD"):
+def run(msgs, s, bars, spread=0.0, resolve=lambda raw: "XAUUSD", spec=None):
     m = [{"id": i + 1, "t": t, "utc": t - 7200, "text": text, "reply_to": rep, "edited": False}
          for i, (t, text, rep) in enumerate(msgs)]
-    return radar.analyze(m, s, resolve, lambda sym: bars, {"XAUUSD": spread}, {"XAUUSD": 0.01})
+    return radar.analyze(m, s, resolve, lambda sym: bars, {"XAUUSD": spread}, {"XAUUSD": 0.01},
+                         {"XAUUSD": spec} if spec else None)
 
 
 def main():
@@ -204,7 +206,7 @@ def main():
     # 20) entrata al secondo esatto del messaggio (dentro la candela al minuto)
     b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.0, 2006.1, 1999.9, 2006.0)] + bars_from([2006.0] * 40, T0 + 120)
     sig, *_ = run([(T0 + 90, "BUY GOLD 2000 SL 1990 TP 2050", None)], S(), b)
-    check(abs(sig[0].entry_p - 2003.0) < 0.01 and sig[0].entry_t == T0 + 90, "entrata interpolata al secondo",
+    check(abs(sig[0].entry_p - 2003.1) < 0.01 and sig[0].entry_t == T0 + 91, "entrata al secondo (1 s dopo il messaggio)",
           (sig[0].entry_p, sig[0].entry_t))
 
     # 21) salto oltre il TP: chiude al prezzo (migliore) di apertura
@@ -244,6 +246,58 @@ def main():
     sig, msgs, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None), (T0 + 11 * 60, "BUY GOLD 2000 SL 1990 TP 2010", None)],
                            S(), b)
     check(len(sig) == 2 and st["duplicates"] == 0, "oltre la finestra di 10 minuti: segnale nuovo")
+
+    # 26) dentro lo stesso minuto: candela ribassista (massimo prima del minimo) → prima il TP
+    b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.5, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 120)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b)
+    check(sig[0].status == "vinto", "candela ribassista: il massimo (TP) arriva prima del minimo (SL)", sig[0].status)
+
+    # 27) pareggio dopo il TP1 nello stesso minuto
+    b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.5, 2011, 1995, 1996)] + bars_from([1996] * 30, T0 + 120)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010 TP 2030", None)], S(be_on_tp1=True, be_offset_points=10), b)
+    check(sig[0].status == "vinto" and abs(sig[0].points - (1000 + 10)) < 1, "TP1 e pareggio nella stessa candela",
+          sig[0].points)
+
+    # 28) spread storico minuto per minuto (dal ponte aggiornato)
+    b = [x + (50,) for x in bars_from(flat + ramp(2000, 2012, 30) + [2012] * 30)]
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b, spread=0.10)
+    check(abs(sig[0].entry_p - 2000.5) < 1e-6, "spread storico della candela al posto di quello di riserva", sig[0].entry_p)
+
+    # 29) swap e commissioni
+    wed = dt.datetime(2025, 11, 12, 10, tzinfo=dt.timezone.utc).timestamp()      # mercoledì
+    check(radar._nights(wed - 2 * 86400, wed - 86400, 3) == 1, "lunedì → martedì: una notte di swap")
+    check(radar._nights(wed - 3 * 86400, wed - 2 * 86400, 3) == 0, "domenica → lunedì: nessuno swap")
+    check(radar._nights(wed, wed + 86400, 3) == 3, "swap triplo del mercoledì")
+    check(radar._nights(wed + 2 * 86400, wed + 5 * 86400, 3) == 1, "venerdì → lunedì: una sola notte")
+    check(radar._nights(wed, wed + 3600, 3) == 0, "nessuna notte nello stesso giorno")
+    spec = {"vpp_acc": 0.9, "swap_long": -20.0, "swap_short": 5.0, "swap_mode": 1, "swap3": 3}
+    long_path = [2000.0] * 10 + [2001.0] * (3 * 1440) + ramp(2001, 2012, 30)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), bars_from(long_path), spec=spec)
+    nights = radar._nights(sig[0].entry_t, sig[0].exit_t, 3)
+    check(nights == 2 and abs(sig[0].swap_lot - (-20 * 0.9 * nights)) < 1e-6, "swap delle notti tenute aperte",
+          (nights, sig[0].swap_lot))
+    m = radar.money_of(sig[0], 0.1, None, commission=7.0)
+    check(abs(m - (sig[0].points * 0.9 * 0.1 + sig[0].swap_lot * 0.1 - 7.0 * 0.1)) < 1e-9, "denaro = prezzo + swap − commissioni", m)
+
+    # 30) limiti di posizioni aperte delle impostazioni (come la copia vera)
+    b = bars_from(flat + [2000.0] * 30 + ramp(2000, 2040, 60))
+    sig, _, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2030", None), (T0 + 300, "SELL EURUSD 1.08 SL 1.09 TP 1.07", None),
+                         (T0 + 600, "BUY GOLD 2000 SL 1985 TP 2035", None)], S(max_open_trades=1), b)
+    check(sig[2].status == "ignorato: troppe posizioni aperte" and st["limited"] >= 1, "limite posizioni aperte",
+          [x.status for x in sig])
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010 TP 2020 TP 2030", None)], S(max_open_trades=2), b)
+    check(sig[0].n_pos == 2, "TP in eccesso tagliati come nella copia", sig[0].n_pos)
+
+    # 31) ordine pendente senza scadenza (0 = mai, come la copia)
+    b = bars_from([2005.0] * 15 + [2005.0] * 2880 + ramp(2005, 1999, 10) + ramp(1999, 2012, 20))
+    sig, *_ = run([(T0, "BUY LIMIT GOLD 2000 SL 1990 TP 2010", None)], S(pending_expiry_min=0), b)
+    check(sig[0].status == "vinto", "limit eseguito dopo 2 giorni (nessuna scadenza)", sig[0].status)
+
+    # 32) chiusura del canale al prezzo del momento (non del minuto dopo)
+    b = bars_from(flat + [2000.0] * 9 + [2000.0]) + [(T0 + 600, 2000, 2008.1, 1999.9, 2008)] + bars_from([2008] * 5, T0 + 660)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2050", None), (T0 + 605, "Close all now", 1)], S(), b)
+    check(sig[0].status == "vinto" and abs(sig[0].exit_p - (2000 + 8 * 6 / 60)) < 0.02, "chiusura al prezzo del messaggio",
+          sig[0].exit_p)
 
     print(f"TUTTI I {len(PASSED)} TEST DEL RADAR (SIMULAZIONE) SUPERATI")
 

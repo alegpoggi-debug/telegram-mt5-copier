@@ -1,4 +1,3 @@
-3.2
-Radar più preciso: usa lo spread reale, il prezzo al secondo del messaggio e la dimensione del punto di MetaTrader; segue le operazioni fino alla chiusura; corregge da solo l ora del broker.
-Radar: scegli con quanti lotti faresti ogni operazione e vedi la stima in euro (valuta del conto).
-I messaggi doppi nel Radar seguono esattamente la stessa regola della copia. Il ponte non va aggiornato.
+3.3
+Radar ancora più vicino alla realtà: ordine corretto di SL e TP dentro il minuto, spread storico, valore esatto del punto, swap notturni, commissione, tempi reali della copia, limiti di posizioni.
+Per la massima precisione aggiorna il ponte una volta: Impostazioni → MetaTrader → «Installa il ponte», poi «Compila» in MetaEditor (senza, il Radar funziona lo stesso).

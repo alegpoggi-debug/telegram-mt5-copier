@@ -150,10 +150,22 @@ class RadarWindow(QDialog):
         gui._clean_spin(self.sp_lot, 90)
         self.sp_lot.setToolTip("Con quanti lotti faresti ogni operazione: la stima in denaro si aggiorna subito")
         self.sp_lot.valueChanged.connect(self._lot_changed)
+        self.sp_comm = QDoubleSpinBox()
+        self.sp_comm.setRange(0, 1000)
+        self.sp_comm.setDecimals(2)
+        self.sp_comm.setSingleStep(0.5)
+        self.sp_comm.setValue(float(radar.prefs().get("commission", 0.0)))
+        gui._clean_spin(self.sp_comm, 80)
+        self.sp_comm.setToolTip("Commissione del tuo conto per 1 lotto, andata e ritorno, nella valuta del conto "
+                                "(es. 7). Lascia 0 se il conto non ha commissioni (conti Standard).")
+        self.sp_comm.valueChanged.connect(self._lot_changed)
         head = QHBoxLayout()
         head.addWidget(self.lbl_name, 1)
         head.addWidget(gui._label("Lotto", "muted"))
         head.addWidget(self.sp_lot)
+        head.addSpacing(6)
+        head.addWidget(gui._label("Commissione/lotto", "muted"))
+        head.addWidget(self.sp_comm)
         head.addSpacing(8)
         head.addWidget(self.cb_days)
         head.addWidget(self.btn_run)
@@ -270,10 +282,10 @@ class RadarWindow(QDialog):
 
     def _stats(self, rep):
         return radar.summarize(rep.signals, rep.messages, rep.stats.get("duplicates", 0), self.sp_lot.value(),
-                               getattr(rep, "usd_to_acc", None))
+                               getattr(rep, "usd_to_acc", None), self.sp_comm.value())
 
-    def _lot_changed(self, v):
-        radar.save_prefs(lot=round(v, 2))
+    def _lot_changed(self, _v=None):
+        radar.save_prefs(lot=round(self.sp_lot.value(), 2), commission=round(self.sp_comm.value(), 2))
         if self.report:
             self._fill(self.report)
         for i in range(self.nav.count()):
@@ -306,6 +318,9 @@ class RadarWindow(QDialog):
         self.lbl_progress.setText(f"Analisi del {rep.generated} · ultimi {rep.days} giorni"
                                   + (f" · spread considerato: {spreads}" if spreads else "")
                                   + (f" · {rep.note}" if rep.note else "")
+                                  + (" · dati esatti dal ponte (spread storico, valore del punto, swap)" if rep.precise else
+                                     " · per la massima precisione aggiorna il ponte: Impostazioni → MetaTrader → "
+                                     "«Installa il ponte», poi «Compila» in MetaEditor")
                                   + (f" · {rep.error}" if rep.error else ""))
 
     # ---------------------------------------------------------------- analisi
@@ -381,8 +396,13 @@ class RadarWindow(QDialog):
             x.show()
         self.pills[6].setToolTip("Messaggi che il canale ha modificato dopo averli inviati")
         self.pills[5].setToolTip("Messaggi ripetuti ignorati (come fa la protezione dai doppi)")
-        self.pills[2].setToolTip(f"Con {lot:g} lotti per operazione" + ("" if st["in_money"] else
-                                 " · importo non stimabile per questi strumenti: risultato in punti"))
+        self.pills[2].setToolTip(f"Con {lot:g} lotti per operazione, commissione {self.sp_comm.value():g} per lotto"
+                                 + (", swap inclusi" if rep.precise else "")
+                                 + ("" if st["in_money"] else " · importo non stimabile per questi strumenti: "
+                                    "risultato in punti (aggiorna il ponte)"))
+        lim = rep.stats.get("limited", 0)
+        self.pills[0].setToolTip(f"{lim} segnali saltati per il limite di posizioni aperte delle tue impostazioni"
+                                 if lim else "Segnali che la copia avrebbe eseguito")
         self.equity.set_points(equity)
 
         sigs = sorted(rep.signals, key=lambda s: -s.t)
@@ -392,8 +412,8 @@ class RadarWindow(QDialog):
             vals = [_when(s.t), s.symbol, f"{s.side.upper()}{'' if s.otype == 'market' else ' ' + s.otype.upper()}",
                     f"{entry:g}" if entry is not None else "mercato", f"{s.sl:g}" if s.sl else "–",
                     ", ".join(f"{t:g}" for t in s.tps) or "–", s.status + ("  ✎" if s.edited else ""),
-                    (_pts(s.points) + (f"  ({_money(s.points * s.vpp * lot * (rep.usd_to_acc or 1), ccy if rep.usd_to_acc else 'USD')})"
-                                       if s.vpp is not None else ""))
+                    (_pts(s.points) + (f"  ({_money(mv, ccy)})" if (mv := radar.money_of(
+                        s, lot, rep.usd_to_acc, self.sp_comm.value())) is not None else ""))
                     if s.status in STATUS_COLOR else ""]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
