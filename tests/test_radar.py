@@ -45,10 +45,10 @@ def ramp(a, b, n):
     return [a + (b - a) * i / (n - 1) for i in range(n)]
 
 
-def run(msgs, s, bars):
+def run(msgs, s, bars, spread=0.0, resolve=lambda raw: "XAUUSD"):
     m = [{"id": i + 1, "t": t, "utc": t - 7200, "text": text, "reply_to": rep, "edited": False}
          for i, (t, text, rep) in enumerate(msgs)]
-    return radar.analyze(m, s, lambda raw: "XAUUSD", lambda sym: bars)
+    return radar.analyze(m, s, resolve, lambda sym: bars, {"XAUUSD": spread}, {"XAUUSD": 0.01})
 
 
 def main():
@@ -57,7 +57,10 @@ def main():
     b = bars_from(flat + ramp(2000, 2012, 30) + [2012] * 30)
     sig, _, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b)
     check(sig[0].status == "vinto" and abs(sig[0].points - 1000) < 1, "BUY al TP: vinto +1000 punti", (sig[0].status, sig[0].points))
-    check(sig[0].money == 10.0, "stima in dollari con 0,01 lotti", sig[0].money)
+    st_m, _ = radar.summarize(sig, [], 0, lot=0.01, usd_to_acc=1.0)
+    check(st_m["in_money"] and abs(st_m["money"] - 10.0) < 1e-6, "stima in dollari con 0,01 lotti", st_m["money"])
+    st_m, _ = radar.summarize(sig, [], 0, lot=0.5, usd_to_acc=0.9)
+    check(abs(st_m["money"] - 1000 * 1.0 * 0.5 * 0.9) < 1e-6, "stima con il lotto scelto e in euro", st_m["money"])
     check(st["wins"] == 1 and st["winrate"] == 100.0, "statistiche vittorie")
 
     # 2) BUY che prende lo SL
@@ -71,7 +74,7 @@ def main():
     check(sig[0].status == "vinto" and abs(sig[0].points - 1000) < 1, "SELL al TP: vinto", sig[0].points)
 
     # 4) stessa candela tocca SL e TP: prudente, conta lo SL
-    b = bars_from(flat) + [(T0, 2000, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 60)
+    b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 120)
     sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b)
     check(sig[0].status == "perso", "SL e TP nella stessa candela: conta lo SL")
 
@@ -186,6 +189,61 @@ def main():
     radar.save_report(rep)
     back = radar.load_report(-100)
     check(back and back.signals[0].status == "vinto" and back.stats["wins"] == 1, "report salvato e riletto")
+
+    # 19) spread: i BUY comprano all'ask, i SELL chiudono all'ask
+    b = bars_from(flat + ramp(2000, 2012, 30) + [2012] * 30)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b, spread=0.30)
+    check(abs(sig[0].entry_p - 2000.30) < 1e-6 and abs(sig[0].points - 970) < 1, "spread sull'entrata BUY",
+          (sig[0].entry_p, sig[0].points))
+    b = bars_from(flat + ramp(2000, 2009.8, 20) + [2009.8] * 20)
+    sig, *_ = run([(T0, "SELL GOLD 2000 SL 2010 TP 1990", None)], S(), b, spread=0.30)
+    check(sig[0].status == "perso", "SELL: lo SL scatta sull'ask (bid + spread)", sig[0].status)
+    sig, *_ = run([(T0, "SELL GOLD 2000 SL 2010 TP 1990", None)], S(), b, spread=0.0)
+    check(sig[0].status == "aperto", "senza spread lo stesso SELL resterebbe aperto", sig[0].status)
+
+    # 20) entrata al secondo esatto del messaggio (dentro la candela al minuto)
+    b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.0, 2006.1, 1999.9, 2006.0)] + bars_from([2006.0] * 40, T0 + 120)
+    sig, *_ = run([(T0 + 90, "BUY GOLD 2000 SL 1990 TP 2050", None)], S(), b)
+    check(abs(sig[0].entry_p - 2003.0) < 0.01 and sig[0].entry_t == T0 + 90, "entrata interpolata al secondo",
+          (sig[0].entry_p, sig[0].entry_t))
+
+    # 21) salto oltre il TP: chiude al prezzo (migliore) di apertura
+    b = bars_from(flat + [2000.0] * 5) + [(T0 + 300, 2015.0, 2016.0, 2014.0, 2015.0)] + bars_from([2015.0] * 5, T0 + 360)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b)
+    check(sig[0].status == "vinto" and abs(sig[0].points - 1500) < 1, "salto oltre il TP", sig[0].points)
+
+    # 22) un'operazione lunga viene seguita fino alla chiusura (non si ferma dopo 5 giorni)
+    long_path = [2000.0] * 10 + [2001.0] * (8 * 1440) + ramp(2001, 2012, 30)
+    sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), bars_from(long_path))
+    check(sig[0].status == "vinto" and sig[0].exit_t > T0 + 7 * 86400, "operazione di 8 giorni seguita fino al TP")
+
+    # 23) verifica automatica dell'ora del broker
+    bars = bars_from([2000 + 0.5 * i for i in range(600)])
+    msgs = [{"id": k, "t": T0 + k * 1800 - 3600, "utc": 0, "text": f"BUY GOLD {2000 + 0.5 * (10 + k * 30):.2f} SL 1900 TP 2900",
+             "reply_to": None} for k in range(1, 8)]
+    check(radar.calibrate_offset(msgs, S(), lambda r: "XAUUSD", lambda sym: bars) == 3600, "ora del broker corretta di +1 h")
+    msgs_ok = [dict(m, t=m["t"] + 3600) for m in msgs]
+    check(radar.calibrate_offset(msgs_ok, S(), lambda r: "XAUUSD", lambda sym: bars) == 0, "ora giusta: nessuna correzione")
+
+    # 24) valore di un punto (contratti standard)
+    vp = radar.value_per_point
+    check(vp("XAUUSD.m", 0.01, 2000) == 1.0 and abs(vp("EURUSD", 0.00001, 1.08) - 1.0) < 1e-9, "valore punto oro/EURUSD")
+    check(abs(vp("USDJPY", 0.001, 150) - 100 / 150) < 1e-9 and vp("US30", 0.1, 39000) is None and
+          vp("EURGBP", 0.00001, 0.85) is None, "valore punto USDJPY, indici e cross")
+
+    # 25) doppioni: stessa regola della copia vera
+    b = bars_from(flat + ramp(2000, 2012, 30) + [2012] * 30)
+    sig, msgs, st, _ = run([(T0, "BUY 2000 SL 1990 TP 2010", None), (T0 + 10, "BUY GOLD 2000 SL 1990 TP 2010", None),
+                            (T0 + 20, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b)
+    check(len(sig) == 1 and st["duplicates"] == 1 and msgs[0].note == "simbolo non riconosciuto",
+          "segnale senza simbolo non conta per i doppi (come la copia)", (len(sig), st["duplicates"]))
+    sig, msgs, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2050", None), (T0 + 300, "chiudete metà", 1),
+                            (T0 + 320, "chiudete metà", 1)], S(), b)
+    check(st["duplicates"] == 1 and msgs[2].note == "doppio: ignorato" and len(sig[0].exits) == 1,
+          "'chiudete metà' ripetuto: una sola chiusura", (st["duplicates"], sig[0].exits))
+    sig, msgs, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None), (T0 + 11 * 60, "BUY GOLD 2000 SL 1990 TP 2010", None)],
+                           S(), b)
+    check(len(sig) == 2 and st["duplicates"] == 0, "oltre la finestra di 10 minuti: segnale nuovo")
 
     print(f"TUTTI I {len(PASSED)} TEST DEL RADAR (SIMULAZIONE) SUPERATI")
 

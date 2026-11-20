@@ -7,7 +7,7 @@ import datetime as dt
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QHeaderView, QListWidget, QListWidgetItem,
+    QAbstractItemView, QComboBox, QDialog, QDoubleSpinBox, QHBoxLayout, QHeaderView, QListWidget, QListWidgetItem,
     QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -24,6 +24,15 @@ def _pts(v):
     return f"{v:+,.0f}".replace(",", ".")
 
 
+SYMBOL_CCY = {"EUR": "€", "USD": "$", "GBP": "£", "JPY": "¥", "CHF": "CHF", "AUD": "A$", "NZD": "NZ$", "CAD": "C$"}
+
+
+def _money(v, ccy="USD"):
+    """Importo in formato italiano: +1.234,56 €"""
+    txt = f"{v:+,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{txt} {SYMBOL_CCY.get(ccy, ccy)}"
+
+
 class EquityChart(QWidget):
     """Curva dei risultati cumulati (in punti)."""
 
@@ -31,6 +40,7 @@ class EquityChart(QWidget):
         super().__init__()
         self.setMinimumHeight(130)
         self.points = []
+        self.fmt = lambda v: f"{_pts(v)} punti"
 
     def set_points(self, pts):
         self.points = pts
@@ -75,8 +85,8 @@ class EquityChart(QWidget):
         p.setPen(QPen(col, 2))
         p.drawPath(path)
         p.setPen(QColor(gui.FAINT))
-        p.drawText(QRectF(r.left(), r.top() - 8, 200, 16), Qt.AlignLeft, f"{_pts(max(vals[1:]))} max")
-        p.drawText(QRectF(r.right() - 200, r.bottom() - 8, 200, 16), Qt.AlignRight, f"{_pts(vals[-1])} punti")
+        p.drawText(QRectF(r.left(), r.top() - 8, 260, 16), Qt.AlignLeft, f"massimo {self.fmt(max(vals[1:]))}")
+        p.drawText(QRectF(r.right() - 260, r.bottom() - 8, 260, 16), Qt.AlignRight, self.fmt(vals[-1]))
 
 
 class _Progress(QObject):
@@ -132,8 +142,19 @@ class RadarWindow(QDialog):
         self.cb_days.setCurrentIndex(max(0, self.cb_days.findData(int(engine.settings["radar_days"]))))
         self.cb_days.setMinimumWidth(170)
         self.btn_run = gui._btn("Aggiorna", self.run_scan, "primary")
+        self.sp_lot = QDoubleSpinBox()
+        self.sp_lot.setRange(0.01, 100)
+        self.sp_lot.setDecimals(2)
+        self.sp_lot.setSingleStep(0.01)
+        self.sp_lot.setValue(float(radar.prefs().get("lot", engine.settings["fixed_lot"])))
+        gui._clean_spin(self.sp_lot, 90)
+        self.sp_lot.setToolTip("Con quanti lotti faresti ogni operazione: la stima in denaro si aggiorna subito")
+        self.sp_lot.valueChanged.connect(self._lot_changed)
         head = QHBoxLayout()
         head.addWidget(self.lbl_name, 1)
+        head.addWidget(gui._label("Lotto", "muted"))
+        head.addWidget(self.sp_lot)
+        head.addSpacing(8)
         head.addWidget(self.cb_days)
         head.addWidget(self.btn_run)
         self.lbl_progress = gui._label("", "muted", wrap=True)
@@ -163,7 +184,7 @@ class RadarWindow(QDialog):
         tab_row.addWidget(gui._label("Doppio clic su un segnale: grafico", "muted"))
         self.btn_sig.setChecked(True)
 
-        self.t_sig = self._table(["DATA", "SIMBOLO", "TIPO", "ENTRATA", "SL", "TP", "ESITO", "PUNTI"])
+        self.t_sig = self._table(["DATA", "SIMBOLO", "TIPO", "ENTRATA", "SL", "TP", "ESITO", "RISULTATO"])
         self.t_sig.cellDoubleClicked.connect(self.open_signal_chart)
         self.t_msg = self._table(["DATA", "MESSAGGIO", "COME È STATO LETTO", "NOTA"])
         self.t_msg.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -226,8 +247,10 @@ class RadarWindow(QDialog):
             rep = radar.load_report(int(c["id"]))
             sub = "non ancora analizzato"
             if rep and rep.stats:
-                wr = rep.stats.get("winrate")
-                sub = f"{_pts(rep.stats['points'])} punti" + (f"  ·  {wr:.0f}% vinti" if wr is not None else "")
+                st, _eq = self._stats(rep)
+                wr = st.get("winrate")
+                res = _money(st["money"], rep.currency) if st["in_money"] else f"{_pts(st['points'])} punti"
+                sub = res + (f"  ·  {wr:.0f}% vinti" if wr is not None else "")
             it = QListWidgetItem(f"{c['name']}\n{sub}")
             it.setData(Qt.UserRole, int(c["id"]))
             it.setData(Qt.UserRole + 1, c["name"])
@@ -244,6 +267,23 @@ class RadarWindow(QDialog):
         idx = next((i for i in range(self.nav.count()) if self.nav.item(i).data(Qt.UserRole) == cur), 0)
         self.nav.setCurrentRow(idx)
         self.show_saved()
+
+    def _stats(self, rep):
+        return radar.summarize(rep.signals, rep.messages, rep.stats.get("duplicates", 0), self.sp_lot.value(),
+                               getattr(rep, "usd_to_acc", None))
+
+    def _lot_changed(self, v):
+        radar.save_prefs(lot=round(v, 2))
+        if self.report:
+            self._fill(self.report)
+        for i in range(self.nav.count()):
+            it = self.nav.item(i)
+            rep = radar.load_report(it.data(Qt.UserRole))
+            if rep and rep.stats:
+                st, _eq = self._stats(rep)
+                wr = st.get("winrate")
+                res = _money(st["money"], rep.currency) if st["in_money"] else f"{_pts(st['points'])} punti"
+                it.setText(f"{it.data(Qt.UserRole + 1)}\n{res}" + (f"  ·  {wr:.0f}% vinti" if wr is not None else ""))
 
     def current(self):
         it = self.nav.currentItem()
@@ -262,7 +302,10 @@ class RadarWindow(QDialog):
                                       "non serve che il computer sia rimasto acceso.")
             return
         self._fill(rep)
+        spreads = ", ".join(f"{k} {v} punti" for k, v in (rep.spreads or {}).items())
         self.lbl_progress.setText(f"Analisi del {rep.generated} · ultimi {rep.days} giorni"
+                                  + (f" · spread considerato: {spreads}" if spreads else "")
+                                  + (f" · {rep.note}" if rep.note else "")
                                   + (f" · {rep.error}" if rep.error else ""))
 
     # ---------------------------------------------------------------- analisi
@@ -308,16 +351,28 @@ class RadarWindow(QDialog):
             self.t_sig.setRowCount(0)
             self.t_msg.setRowCount(0)
             return
-        pts = st["points"]
-        col = gui.GREEN if pts >= 0 else gui.RED
-        money = f"  (≈ {st['money']:+.2f} $)" if st.get("money") is not None else ""
+        st, equity = self._stats(rep)
+        lot = self.sp_lot.value()
+        ccy = rep.currency
         wr = st.get("winrate")
+        if st["in_money"]:
+            col = gui.GREEN if st["money"] >= 0 else gui.RED
+            result = f'Risultato <span style="color:{col}">{_money(st["money"], ccy)}</span>'
+            if st["single_symbol"]:
+                result += f"  ({_pts(st['points'])} punti)"
+            drawdown = f"Calo massimo {_money(-st['max_drawdown'], ccy)}"
+            self.equity.fmt = lambda v: _money(v, ccy)
+        else:
+            col = gui.GREEN if st["points"] >= 0 else gui.RED
+            result = f'Risultato <span style="color:{col}">{_pts(st["points"])} punti</span>'
+            drawdown = f"Calo massimo {_pts(-st['max_drawdown'])} punti"
+            self.equity.fmt = lambda v: f"{_pts(v)} punti"
         texts = [
             f"Segnali {st['executed']}" + (f" / {st['signals']}" if st["signals"] != st["executed"] else ""),
             f"Vinti {wr:.0f}%" if wr is not None else "Vinti –",
-            f'Risultato <span style="color:{col}">{_pts(pts)} punti</span>{money}',
+            result,
             f"Serie peggiore {st['worst_streak']}",
-            f"Calo massimo {_pts(-st['max_drawdown'])}",
+            drawdown,
             f"Doppioni {st['duplicates']}",
             f"Modificati {st['edited']}",
         ]
@@ -326,7 +381,9 @@ class RadarWindow(QDialog):
             x.show()
         self.pills[6].setToolTip("Messaggi che il canale ha modificato dopo averli inviati")
         self.pills[5].setToolTip("Messaggi ripetuti ignorati (come fa la protezione dai doppi)")
-        self.equity.set_points(rep.equity)
+        self.pills[2].setToolTip(f"Con {lot:g} lotti per operazione" + ("" if st["in_money"] else
+                                 " · importo non stimabile per questi strumenti: risultato in punti"))
+        self.equity.set_points(equity)
 
         sigs = sorted(rep.signals, key=lambda s: -s.t)
         self.t_sig.setRowCount(len(sigs))
@@ -334,8 +391,9 @@ class RadarWindow(QDialog):
             entry = s.entry_p if s.entry_p is not None else s.entry
             vals = [_when(s.t), s.symbol, f"{s.side.upper()}{'' if s.otype == 'market' else ' ' + s.otype.upper()}",
                     f"{entry:g}" if entry is not None else "mercato", f"{s.sl:g}" if s.sl else "–",
-                    ", ".join(f"{t:g}" for t in s.tps) or "–", s.status,
-                    (_pts(s.points) + (f"  ({s.money:+.2f} $)" if s.money is not None else ""))
+                    ", ".join(f"{t:g}" for t in s.tps) or "–", s.status + ("  ✎" if s.edited else ""),
+                    (_pts(s.points) + (f"  ({_money(s.points * s.vpp * lot * (rep.usd_to_acc or 1), ccy if rep.usd_to_acc else 'USD')})"
+                                       if s.vpp is not None else ""))
                     if s.status in STATUS_COLOR else ""]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
@@ -346,6 +404,9 @@ class RadarWindow(QDialog):
                 if c == 0:
                     it.setData(Qt.UserRole, s.msg_id)
                     it.setToolTip(s.text)
+                if c == 6 and s.edited:
+                    it.setToolTip("Il canale ha modificato questo segnale dopo averlo inviato: "
+                                  "la stima usa la versione finale")
                 self.t_sig.setItem(r, c, it)
 
         msgs = sorted(rep.messages, key=lambda m: -m.t)

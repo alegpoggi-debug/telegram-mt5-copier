@@ -140,6 +140,12 @@ class FakeEA(threading.Thread):
                 cid = f.name[4:-4]
                 now_server = int(time.time()) + OFFSET
                 res = {"ok": 0, "msg": "?", "price": now_server}
+                if kv["action"] == "QUOTE":
+                    if kv["symbol"].startswith("EURUSD"):
+                        res = {"ok": 1, "price": 1.0800, "msg": "ask:1.08010 point:0.00001000"}
+                    else:
+                        bid = price(now_server)
+                        res = {"ok": 1, "price": bid, "msg": f"ask:{bid + 0.25:.2f} point:0.01000000"}
                 if kv["action"] == "RATES":
                     self.rates_calls += 1
                     sec = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}[kv["tf"]]
@@ -211,8 +217,24 @@ def main():
     check(statuses <= {"vinto", "perso", "pareggio", "aperto"}, "esiti validi", statuses)
     check(rw.t_sig.rowCount() == 10 and rw.t_msg.rowCount() == len(MESSAGES), "tabelle segnali e messaggi",
           (rw.t_sig.rowCount(), rw.t_msg.rowCount()))
-    check(all(p.isVisible() for p in rw.pills) and "punti" in rw.pills[2].text(), "riepilogo in alto")
-    check("punti" in rw.nav.item(0).text(), "classifica a sinistra aggiornata", rw.nav.item(0).text())
+    check(all(p.isVisible() for p in rw.pills) and "€" in rw.pills[2].text() and "punti" in rw.pills[2].text(),
+          "riepilogo in euro (conto in EUR) con i punti", rw.pills[2].text())
+    check(rep.spreads == {"XAUUSD.m": 25} and "spread considerato: XAUUSD.m 25 punti" in rw.lbl_progress.text(),
+          "spread reale letto da MetaTrader", (rep.spreads, rw.lbl_progress.text()))
+    check(rep.currency == "EUR" and abs(rep.usd_to_acc - 1 / 1.08005) < 1e-6, "cambio dollaro/euro", rep.usd_to_acc)
+    # scelta del lotto: la stima in denaro cambia subito, i punti no
+    rw.sp_lot.setValue(0.01)
+    m1, _ = radar.summarize(rep.signals, rep.messages, 0, 0.01, rep.usd_to_acc)
+    txt1 = rw.pills[2].text()
+    rw.sp_lot.setValue(0.10)
+    m10, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc)
+    check(abs(m10["money"] - 10 * m1["money"]) < 0.11 and txt1 != rw.pills[2].text(), "lotto 0,10 = 10 volte 0,01",
+          (m1["money"], m10["money"]))
+    check(radar.prefs().get("lot") == 0.1, "lotto scelto ricordato")
+    cell = rw.t_sig.item(0, 7).text()
+    check(("€" in cell) or cell == "", "risultato di ogni segnale in euro", cell)
+    check("€" in rw.nav.item(0).text() or "punti" in rw.nav.item(0).text(), "classifica a sinistra aggiornata",
+          rw.nav.item(0).text())
     notes = [rw.t_msg.item(r, 3).text() for r in range(rw.t_msg.rowCount())]
     check(notes.count("doppio: ignorato") == 4 and "gestione" in notes, "nota dei messaggi", notes)
     # coerenza: i punti in alto sono la somma dei segnali

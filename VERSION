@@ -1,4 +1,4 @@
-3.1
-Nuovo: Radar. In Impostazioni → Telegram accendi «Radar» accanto a un canale e premi «Apri Radar»: vedi come sarebbe andato, con le tue impostazioni, senza aprire operazioni. Funziona anche se il computer è rimasto spento (rilegge i messaggi passati).
-Nuovo: protezione dai messaggi doppi (Impostazioni → Trading → Segnali): se lo stesso segnale arriva più volte, ne esegue uno solo.
-Il ponte non va aggiornato.
+3.2
+Radar più preciso: usa lo spread reale, il prezzo al secondo del messaggio e la dimensione del punto di MetaTrader; segue le operazioni fino alla chiusura; corregge da solo l ora del broker.
+Radar: scegli con quanti lotti faresti ogni operazione e vedi la stima in euro (valuta del conto).
+I messaggi doppi nel Radar seguono esattamente la stessa regola della copia. Il ponte non va aggiornato.
