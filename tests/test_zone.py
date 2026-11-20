@@ -105,7 +105,7 @@ async def main():
     async def signal(text, **settings):
         base = {k: v for k, v in DEFAULTS.items() if not k.startswith("tg_")}
         base.update({"mt5_dir": str(common), "dry_run": False, "max_trades_per_symbol": 99, "max_open_trades": 99,
-                     "max_total_lots": 99})
+                     "max_total_lots": 99, "ignore_duplicates": False})
         base.update(settings)
         eng.settings.update(base)
         ea.positions.clear()

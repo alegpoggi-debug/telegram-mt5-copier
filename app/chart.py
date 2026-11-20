@@ -39,6 +39,7 @@ class Trade:
     is_open: bool = False
     is_order: bool = False
     exits: list = field(default_factory=list)   # chiusure parziali: (tempo, prezzo)
+    unit: str = ""                # "punti" per i segnali simulati del Radar (risultato in punti, non in denaro)
 
     def label(self) -> str:
         side = self.side.upper()
@@ -459,7 +460,7 @@ class CandleChart(QWidget):
         p.drawPolygon(tri)
         p.setPen(col)
         p.drawText(QRectF(xi - 100, lbl_y, 200, 16), Qt.AlignCenter,
-                   f"{'BUY' if buy else 'SELL'} {tr.volume:g}  ·  {tr.entry_price:.{self.digits}f}")
+                   f"{'BUY' if buy else 'SELL'}{f' {tr.volume:g}' if tr.volume else ''}  ·  {tr.entry_price:.{self.digits}f}")
         # punto di uscita
         if tr.exit_time:
             p.setPen(QPen(res_col, 2))
@@ -471,7 +472,7 @@ class CandleChart(QWidget):
             above = (yo < yi) if buy else (yo <= yi)
             ty = yo - 26 if above else yo + 10
             p.drawText(QRectF(xo - 100, ty, 200, 16), Qt.AlignCenter,
-                       f"{tr.profit:+.2f}  ·  {tr.exit_price:.{self.digits}f}")
+                       (f"{tr.profit:+.0f} {tr.unit}" if tr.unit else f"{tr.profit:+.2f}") + f"  ·  {tr.exit_price:.{self.digits}f}")
         p.restore()
 
     # ---------------------------------------------------------------- mouse

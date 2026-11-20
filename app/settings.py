@@ -58,6 +58,10 @@ DEFAULTS = {
     "lot_split": "",
     "order_type_mode": "as_signal",
     "max_entry_distance_points": 0,
+    "ignore_duplicates": True,
+    "duplicate_window_min": 10,
+    "radar_channels": [],  # canali solo osservati dal Radar: lista di {"id": int, "name": str}
+    "radar_days": 30,
     "zone_wait": False,
     "zone_wait_seconds": 15,
     "zone_margin_points": 0,

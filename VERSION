@@ -1,3 +1,4 @@
-3.0
-Nuovo in Impostazioni → Trading → ENTRATA: aspetta che il prezzo rientri nella fascia del segnale (tempo a scelta), spread massimo e slippage massimo.
+3.1
+Nuovo: Radar. In Impostazioni → Telegram accendi «Radar» accanto a un canale e premi «Apri Radar»: vedi come sarebbe andato, con le tue impostazioni, senza aprire operazioni. Funziona anche se il computer è rimasto spento (rilegge i messaggi passati).
+Nuovo: protezione dai messaggi doppi (Impostazioni → Trading → Segnali): se lo stesso segnale arriva più volte, ne esegue uno solo.
 Il ponte non va aggiornato.

@@ -177,8 +177,9 @@ async def main():
         ea.positions.clear()
         ea.orders.clear()
         base = {k: v for k, v in DEFAULTS.items() if not k.startswith("tg_")}
-        base.update({"mt5_dir": str(common), "dry_run": False})
+        base.update({"mt5_dir": str(common), "dry_run": False, "ignore_duplicates": False})
         base.update(kw)
+        eng._seen.clear()
         eng.settings.update(base)
         eng._prev_positions = {}
         await refresh()

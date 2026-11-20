@@ -132,7 +132,10 @@ def main():
     d.sp_zone_margin.setValue(15)
     d.sp_spread.setValue(40)
     d.sp_slip.setValue(25)
+    check(not d.dup_wrap.isHidden(), "protezione doppi accesa di base")
+    d.sp_dup.setValue(5)
     d.save()
+    check(eng.settings["ignore_duplicates"] is True and eng.settings["duplicate_window_min"] == 5, "impostazione doppi salvata")
     s2 = eng.settings.get()
     check((s2["zone_wait"], s2["zone_wait_seconds"], s2["zone_margin_points"], s2["max_spread_points"],
            s2["slippage_points"]) == (True, 20, 15, 40, 25), "impostazioni ENTRATA salvate")

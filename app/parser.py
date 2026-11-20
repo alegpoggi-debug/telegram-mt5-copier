@@ -190,6 +190,24 @@ def parse_message(text: str, s: dict, broker_symbols: list[str] | None = None) -
     return res
 
 
+def fingerprint(r: dict, cid=None, reply_id=None):
+    """Impronta di un messaggio: due messaggi con la stessa impronta sono "lo stesso messaggio".
+
+    Segnali: stesso simbolo, direzione, tipo, entrata, SL e TP (anche se scritti in modo diverso).
+    Gestione: stesso tipo e parametri, nello stesso canale e in risposta allo stesso messaggio.
+    """
+    def rd(v):
+        return None if v is None else round(float(v), 5)
+    k = r.get("kind")
+    if k == "signal":
+        return ("signal", (r.get("symbol") or "").upper(), r.get("side"), r.get("order_type"), rd(r.get("entry")),
+                rd(r.get("entry2")), rd(r.get("sl")), tuple(rd(t) for t in r.get("tps") or []))
+    if k in ("breakeven", "move_sl", "close", "partial", "cancel", "tp_hit"):
+        return (k, cid, reply_id, rd(r.get("percent")), rd(r.get("new_sl")), (r.get("symbol") or "").upper(),
+                bool(r.get("also_breakeven")))
+    return None
+
+
 def describe(r: dict) -> str:
     k = r["kind"]
     if k == "signal":

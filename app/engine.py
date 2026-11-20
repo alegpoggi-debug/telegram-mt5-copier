@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .bridge import Bridge, BridgeError, find_common_files_dir
 from .config import DATA_DIR
-from .parser import describe, parse_message
+from .parser import describe, fingerprint, parse_message
 from .settings import SettingsStore, split_words
 
 log = logging.getLogger("engine")
@@ -95,6 +95,7 @@ class Engine:
         self.day = None
         self._prev_positions: dict[int, dict] = {}
         self._last_modify: dict[int, float] = {}
+        self._seen: dict = {}   # impronte dei messaggi recenti (protezione dai doppi)
         self._phone = None
         self._handlers_added = False
 
@@ -362,10 +363,16 @@ class Engine:
                 return ["segnale già eseguito"]
             if not r["symbol"]:
                 return ["simbolo non riconosciuto: aggiungilo in Impostazioni → Orari e simboli → Nomi alternativi"]
+            dup = self._duplicate(fingerprint(r), s, edited)
+            if dup:
+                return [dup]
             key = self.db.new(channel, cid, msg_id, text, r)
             return await self.open_signal(r, s, key)
         if kind in ("none", "ignore"):
             return []
+        dup = self._duplicate(fingerprint(r, cid, reply_id), s, edited)
+        if dup:
+            return [dup]
         targets = self._targets(cid, reply_id, r.get("symbol"), s)
         pos = [t for t in targets if t[0] == "pos"]
         ords = [t for t in targets if t[0] == "ord"]
@@ -411,6 +418,20 @@ class Engine:
                 out += await self.breakeven([p[1]["ticket"] for p in pos])
             return out or ["impostato: non fare nulla al 'TP raggiunto'"]
         return []
+
+    def _duplicate(self, fp, s, edited) -> str | None:
+        """Se lo stesso messaggio è già arrivato da poco, ritorna il motivo per ignorarlo."""
+        if fp is None or edited or not s["ignore_duplicates"]:
+            return None
+        now = time.time()
+        window = max(1, int(s["duplicate_window_min"])) * 60
+        self._seen = {k: t for k, t in self._seen.items() if now - t < window}
+        if fp in self._seen:
+            when = dt.datetime.fromtimestamp(self._seen[fp]).strftime("%H:%M:%S")
+            what = "segnale" if fp[0] == "signal" else "messaggio"
+            return f"{what} doppio ignorato (uguale a quello delle {when})"
+        self._seen[fp] = now
+        return None
 
     def _targets(self, cid, reply_id, symbol, s):
         """Posizioni/ordini a cui si applica un messaggio di gestione."""

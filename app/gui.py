@@ -86,8 +86,9 @@ class UiBridge(QObject):
 class Switch(QAbstractButton):
     """Interruttore on/off minimale."""
 
-    def __init__(self, checked=False, parent=None):
+    def __init__(self, checked=False, parent=None, color=None):
         super().__init__(parent)
+        self.color = color or GREEN
         self.setCheckable(True)
         self.setChecked(bool(checked))
         self.setCursor(Qt.PointingHandCursor)
@@ -100,7 +101,7 @@ class Switch(QAbstractButton):
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(1, 1, 38, 20)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(GREEN if self.isChecked() else BORDER))
+        p.setBrush(QColor(self.color if self.isChecked() else BORDER))
         p.drawRoundedRect(r, 10, 10)
         p.setBrush(QColor("#ffffff"))
         x = 20 if self.isChecked() else 3
@@ -423,18 +424,24 @@ class MainWindow(QMainWindow):
 class ChannelRow(QFrame):
     """Riga di un canale: si clicca ovunque per sceglierlo."""
 
-    def __init__(self, cid, name, checked, on_change):
+    def __init__(self, cid, name, checked, on_change, radar=False, on_radar=None):
         super().__init__()
         self.cid, self.name = cid, name
         self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(14)
         self.lbl = QLabel(name)
         self.lbl.setTextFormat(Qt.PlainText)
         self.switch = Switch(checked)
+        self.switch.setToolTip("Copia: il programma esegue i segnali di questo canale")
+        self.radar = Switch(radar, color=BLUE)
+        self.radar.setToolTip("Radar: osserva il canale senza copiarlo")
         lay.addWidget(self.lbl, 1)
+        lay.addWidget(self.radar)
         lay.addWidget(self.switch)
         self.switch.toggled.connect(lambda _c: (self._paint(), on_change()))
+        self.radar.toggled.connect(lambda _c: on_radar and on_radar())
         self._paint()
 
     def _paint(self):
@@ -581,13 +588,25 @@ class SettingsDialog(QDialog):
         head = QHBoxLayout()
         head.addWidget(_label("CANALI", "section"))
         head.addStretch(1)
+        head.addWidget(_btn("Apri Radar", self.open_radar, "ghost"))
         head.addWidget(_btn("Aggiorna elenco", lambda: self.load_channels(quiet=False), "ghost"))
         ch.addLayout(head)
-        ch.addWidget(_label("Clicca su un canale per attivarlo. Le scelte si salvano subito.", "muted", wrap=True))
+        ch.addWidget(_label("Copia: il programma esegue i segnali (clic sul nome). Radar: osserva soltanto, per vedere "
+                            "come sarebbe andato il canale. Le scelte si salvano subito.", "muted", wrap=True))
         self.ed_filter = QLineEdit()
         self.ed_filter.setPlaceholderText("Cerca…")
         self.ed_filter.textChanged.connect(self.filter_channels)
         ch.addWidget(self.ed_filter)
+        cols = QHBoxLayout()
+        cols.setContentsMargins(12, 4, 12, 0)
+        cols.setSpacing(14)
+        cols.addStretch(1)
+        for t in ("RADAR", "COPIA"):
+            c = _label(t, "section")
+            c.setFixedWidth(40)
+            c.setAlignment(Qt.AlignCenter)
+            cols.addWidget(c)
+        ch.addLayout(cols)
         self.rows_box = QVBoxLayout()
         self.rows_box.setSpacing(2)
         ch.addLayout(self.rows_box)
@@ -598,6 +617,14 @@ class SettingsDialog(QDialog):
 
         for c in self.s["tg_channels"]:
             self._add_channel_row(c["id"], c["name"], True)
+        radar_ids = {c["id"] for c in self.s["radar_channels"]}
+        for r in self.rows:
+            if r.cid in radar_ids:
+                r.radar.blockSignals(True)
+                r.radar.setChecked(True)
+                r.radar.blockSignals(False)
+        for c in self.s["radar_channels"]:
+            self._add_channel_row(c["id"], c["name"], False, radar=True)
         try:
             me = self.engine.call(self.engine.tg_me(), timeout=10) if self.engine.tg_authorized else None
         except Exception:
@@ -615,16 +642,32 @@ class SettingsDialog(QDialog):
             self.login_box.show()
             self.btn_logout.hide()
 
-    def _add_channel_row(self, cid, name, checked):
+    def _add_channel_row(self, cid, name, checked, radar=False):
         if any(r.cid == cid for r in self.rows):
             return
-        row = ChannelRow(cid, name, checked, self._channels_changed)
+        row = ChannelRow(cid, name, checked, self._channels_changed, radar, self._radar_changed)
         self.rows.append(row)
         self.rows_box.addWidget(row)
         self.lbl_no_rows.hide()
 
     def _checked_channels(self):
         return [{"id": r.cid, "name": r.name} for r in self.rows if r.isChecked()]
+
+    def _radar_list(self):
+        """Canali del Radar, mantenendo l'ordine già salvato."""
+        on = {r.cid: r.name for r in self.rows if r.radar.isChecked()}
+        old = [c for c in self.s["radar_channels"] if c["id"] in on]
+        have = {c["id"] for c in old}
+        return old + [{"id": cid, "name": n} for cid, n in on.items() if cid not in have]
+
+    def _radar_changed(self):
+        lst = self._radar_list()
+        self.engine.settings.update({"radar_channels": lst})
+        self.s["radar_channels"] = lst
+
+    def open_radar(self):
+        from .radar_ui import RadarWindow
+        RadarWindow.show_for(self.parent() or self, self.engine)
 
     def _channels_changed(self):
         """Salva subito i canali scelti e li mette in ascolto."""
@@ -857,6 +900,21 @@ class SettingsDialog(QDialog):
         for v, t in (("ignore", "Ignora il segnale"), ("default", "Usa uno SL predefinito"), ("none", "Apri senza SL")):
             self.cb_nosl.addItem(t, v)
         self.cb_nosl.setCurrentIndex(max(0, self.cb_nosl.findData(s["no_sl_mode"])))
+        self.sw_dup = Switch(s["ignore_duplicates"])
+        self._row(l3, "Ignora i messaggi doppi", "Se lo stesso segnale (o lo stesso messaggio di gestione) arriva "
+                  "più volte, viene eseguito una sola volta.", self.sw_dup)
+        self.sp_dup = QSpinBox()
+        self.sp_dup.setRange(1, 1440)
+        self.sp_dup.setSuffix(" minuti")
+        self.sp_dup.setValue(s["duplicate_window_min"])
+        _clean_spin(self.sp_dup)
+        self.dup_wrap = QWidget()
+        dw = QVBoxLayout(self.dup_wrap)
+        dw.setContentsMargins(0, 0, 0, 0)
+        self._row(dw, "Considera doppi entro", "Un messaggio uguale arrivato dopo questo tempo vale come nuovo.", self.sp_dup)
+        l3.addWidget(self.dup_wrap)
+        self.sw_dup.toggled.connect(self.dup_wrap.setVisible)
+        self.dup_wrap.setVisible(s["ignore_duplicates"])
         self._row(l3, "Segnali senza Stop Loss", None, self.cb_nosl)
         self.sp_slpts = QSpinBox()
         self.sp_slpts.setRange(1, 1000000)
@@ -1002,6 +1060,8 @@ class SettingsDialog(QDialog):
             "hours_enabled": self.sw_hours.isChecked(),
             "hours_start": self.tm_start.time().toString("HH:mm"),
             "hours_end": self.tm_end.time().toString("HH:mm"),
+            "ignore_duplicates": self.sw_dup.isChecked(),
+            "duplicate_window_min": self.sp_dup.value(),
             "zone_wait": self.sw_zone.isChecked(),
             "zone_wait_seconds": self.sp_zone_sec.value(),
             "zone_margin_points": self.sp_zone_margin.value(),
@@ -1051,6 +1111,7 @@ class SettingsDialog(QDialog):
             vals["tg_api_id"] = self.ed_api_id.text().strip()
             vals["tg_api_hash"] = self.ed_api_hash.text().strip()
         vals["tg_channels"] = self._checked_channels()
+        vals["radar_channels"] = self._radar_list()
         vals["mt5_dir"] = self.ed_mt5_dir.text().strip()
         # limiti collegati, così non bloccano mai le scelte qui sopra
         if (vals["max_lot_per_trade"], vals["max_open_trades"]) != (self.s["max_lot_per_trade"], self.s["max_open_trades"]):
