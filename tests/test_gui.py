@@ -218,6 +218,19 @@ def main():
     d.rows[2].switch.setChecked(True)
     d.save()
 
+    # voce «Radar» nel menu delle impostazioni: apre la finestra del Radar
+    from app import radar_ui
+    d = gui.SettingsDialog(win, eng, "Trading")
+    d.show()
+    d.nav.setCurrentRow(d.nav.count() - 1)
+    QTest.qWait(100)
+    rw = radar_ui.RadarWindow._instance
+    check(d.nav.item(d.nav.count() - 1).text().startswith("Radar") and rw is not None and rw.isVisible(),
+          "voce Radar nel menu apre il Radar")
+    check(d.nav.currentRow() == 2 and d.stack.currentIndex() == 2, "il menu resta sulla pagina di prima")
+    rw.close()
+    d.reject()
+
     # ---------------------------------------------------- 4) MetaTrader: installa il ponte
     experts = TMP / "home/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
     experts.mkdir(parents=True)

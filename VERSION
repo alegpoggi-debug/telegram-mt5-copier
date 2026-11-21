@@ -1,3 +1,2 @@
-3.4
-Radar: menu «Impostazioni del Radar» (lotto, commissione, TP, pareggio, doppioni…) separato dalla copia; ogni canale con il suo guadagno accanto; messaggi con data, ora e miniatura del grafico con entrata, uscita ed esito (TP/SL/pareggio).
-Copiatore: nuove impostazioni del pareggio in Trading → Gestione (segui il pareggio del canale, pareggio automatico dopo X punti, margine).
+3.5
+Il Radar si apre anche dal menu a sinistra delle Impostazioni (voce «Radar»).

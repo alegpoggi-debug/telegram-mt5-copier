@@ -486,6 +486,8 @@ class SettingsDialog(QDialog):
                            ("Trading", self._page_trading()), ("Prova un messaggio", self._page_test())):
             QListWidgetItem(name, self.nav)
             self.stack.addWidget(self._scroll(page))
+        QListWidgetItem("Radar  ↗", self.nav)     # apre la finestra del Radar
+        self._last_page = 0
         self.nav.currentRowChanged.connect(self._go)
         idx = self.PAGES.index(start_page) if start_page in self.PAGES else 0
         self.nav.setCurrentRow(idx)
@@ -518,6 +520,13 @@ class SettingsDialog(QDialog):
         return sc
 
     def _go(self, i):
+        if i >= len(self.PAGES):                  # voce «Radar»: apre la finestra e resta sulla pagina di prima
+            self.nav.blockSignals(True)
+            self.nav.setCurrentRow(self._last_page)
+            self.nav.blockSignals(False)
+            self.open_radar()
+            return
+        self._last_page = i
         self.stack.setCurrentIndex(i)
         if self.PAGES[i] == "Telegram" and self.engine.tg_authorized and not self._loaded_chats:
             self._loaded_chats = True
