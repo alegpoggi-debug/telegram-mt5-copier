@@ -809,22 +809,6 @@ class Engine:
         sig = self.db.get(k) if k else None
         return self.settings_for(sig["chat_id"]) if sig else self.settings.get()
 
-    async def tg_signal_chats(self, limit=60, progress=lambda text: None) -> list[int]:
-        """Canali e gruppi che negli ultimi messaggi hanno inviato almeno un segnale."""
-        s = self.settings.get()
-        chats = await self.tg_list_chats()
-        found = []
-        for n, c in enumerate(chats, 1):
-            progress(f"Controllo {n}/{len(chats)}: {c['name']}")
-            try:
-                async for m in self.tg.iter_messages(c["id"], limit=limit):
-                    if m.message and parse_message(m.message, s, None)["kind"] == "signal":
-                        found.append(c["id"])
-                        break
-            except Exception:
-                continue
-        return found
-
     async def _auto_manage(self):
         positions = {p["ticket"]: p for p in self.my_positions()}
         # 1) TP preso su una posizione → pareggio sulle altre dello stesso segnale

@@ -326,52 +326,12 @@ def main():
     def visible():
         return [next(r for r in d.rows if r.cid == c).isVisible() for c, _ in CHATS]
 
-    # ---------------------------------------------------- 3c) solo i canali che inviano segnali
-    check(all(r.isVisible() for r in d.rows) and d.btn_signals.text() == "Solo canali con segnali",
-          "di base si vedono tutti i canali")
-    for r in d.rows:
-        r.switch.setChecked(False)
-        r.radar.setChecked(False)
-    d.toggle_signal_chats()
-    for _ in range(100):
-        QTest.qWait(50)
-        if not d._scanning:
-            break
-    vis = {r.name: r.isVisible() for r in d.rows}
-    check(vis == {CHATS[0][1]: True, CHATS[1][1]: False, CHATS[2][1]: True}, "nascosti i canali senza segnali", vis)
-    check(d.btn_signals.text() == "Mostra tutti" and "1 nascosti" in d.lbl_signals.text(), "pulsante e spiegazione",
-          (d.btn_signals.text(), d.lbl_signals.text()))
-    check(sorted(eng.settings["signal_chats"]) == sorted([CHATS[0][0], CHATS[2][0]]) and eng.settings["only_signal_chats"],
-          "scelta ricordata")
     d.reject()
-    d = gui.SettingsDialog(win, eng, "Telegram")
-    d.show()
-    QTest.qWait(200)
-    check(visible() == [True, False, True], "riaprendo il filtro resta", visible())
-    d.ed_filter.setText("gruppo")
-    check(visible() == [False, False, True], "ricerca insieme al filtro", visible())
-    d.ed_filter.setText("")
-    d.btn_signals.click()
-    check(all(r.isVisible() for r in d.rows) and not eng.settings["only_signal_chats"], "«Mostra tutti»")
-    d.btn_signals.click()          # riattiva: ricontrolla i canali
-    for _ in range(100):
-        QTest.qWait(50)
-        if not d._scanning:
-            break
-    fx = next(r for r in d.rows if r.cid == CHATS[1][0])
-    check(not fx.isVisible(), "filtro di nuovo attivo")
-    fx.radar.setChecked(True)          # un canale nel Radar resta sempre visibile
-    d.filter_channels()
-    check(fx.isVisible(), "canale nel Radar sempre visibile anche senza segnali")
-    fx.radar.setChecked(False)
-    d.btn_signals.click()
-    check(all(r.isVisible() for r in d.rows), "tutti di nuovo visibili")
-    next(r for r in d.rows if r.cid == CHATS[2][0]).switch.setChecked(True)
-    check(sorted(r.cid for r in d.rows) == sorted(c for c, _ in CHATS), "nessun canale perso dal filtro")
-    d.save()
 
-    # ---------------------------------------------------- 3d) elenco scelto a mano (anche canali senza segnali)
+    # ---------------------------------------------------- 3c) cestino accanto al nome
     VIP, FX, AMICI = CHATS[0][0], CHATS[1][0], CHATS[2][0]
+    check(not hasattr(d, "btn_signals") and not hasattr(d, "btn_edit_list") and not hasattr(eng, "tg_signal_chats"),
+          "tolta la funzione «solo canali con segnali»")
     d = gui.SettingsDialog(win, eng, "Telegram")
     d.show()
     QTest.qWait(200)
@@ -381,54 +341,55 @@ def main():
 
     def vis():
         return {c: r_(c).isVisible() for c, _ in CHATS}
-    check(all(vis().values()) and not any(r.pin.isVisible() for r in d.rows), "pulsanti dell'elenco nascosti di base")
-    d.btn_edit_list.click()
-    check(d._editing and d.btn_edit_list.text() == "Fatto" and all(vis().values()) and
-          all(r.pin.isVisible() for r in d.rows), "«Modifica elenco» mostra tutti i canali con il pulsante")
-    check(r_(FX).pin.text() == "＋ Aggiungi" and r_(VIP).pin.text() == "✓ Nell'elenco" and
-          r_(AMICI).pin.text() == "✓ Sempre" and not r_(AMICI).pin.isEnabled(),
-          "stato di ogni canale (senza segnali / con segnali / in Copia)", [r.pin.text() for r in d.rows])
-    QTest.mouseClick(r_(FX).pin, Qt.LeftButton)          # aggiungo un canale che non manda ancora segnali
-    check(r_(FX).pin.text() == "✓ Nell'elenco" and not r_(FX).isChecked(), "aggiunto, senza attivare la copia")
-    QTest.mouseClick(r_(VIP).pin, Qt.LeftButton)         # tolgo un canale che manda segnali
-    check(r_(VIP).pin.text() == "＋ Aggiungi" and not r_(VIP).isChecked(), "tolto dall'elenco")
-    d.btn_edit_list.click()
-    check(not d._editing and vis() == {VIP: False, FX: True, AMICI: True}, "«Fatto»: si vede solo il mio elenco", vis())
-    check(eng.settings["kept_chats"] == [FX] and eng.settings["removed_chats"] == [VIP], "scelte salvate")
-    # ricontrollare i segnali non cancella le scelte
-    d.btn_signals.click()                                 # mostra tutti
-    check(all(vis().values()), "«Mostra tutti»")
-    d.btn_signals.click()                                 # ricontrolla
-    for _ in range(100):
-        QTest.qWait(50)
-        if not d._scanning:
-            break
-    check(vis() == {VIP: False, FX: True, AMICI: True}, "dopo il nuovo controllo le mie scelte restano", vis())
+    check(all(r.trash.isVisible() for r in d.rows) and not d.btn_restore.isVisible(), "cestino su ogni canale")
+    row_fx = r_(FX)
+    check(row_fx.trash.geometry().left() - row_fx.lbl.geometry().right() < 30, "cestino di fianco al nome",
+          (row_fx.lbl.geometry(), row_fx.trash.geometry()))
+    for r in d.rows:
+        r.switch.setChecked(r.cid == VIP)
+        r.radar.setChecked(False)
+    copy_before = eng.settings["tg_channels"]
+    ANSWER["q"] = QMessageBox.No             # canale non in Copia: nessuna domanda, si toglie subito
+    QTest.mouseClick(r_(FX).trash, Qt.LeftButton)
+    ANSWER["q"] = QMessageBox.Yes
+    check(vis() == {VIP: True, FX: False, AMICI: True} and eng.settings["removed_chats"] == [FX], "canale tolto", vis())
+    check(eng.settings["tg_channels"] == copy_before, "il cestino non tocca la copia degli altri canali", (copy_before, eng.settings["tg_channels"]))
+    check(d.btn_restore.isVisible() and "(1)" in d.btn_restore.text(), "«Ripristina tolti (1)»", d.btn_restore.text())
+    # canale in Copia: chiede conferma
+    r_(AMICI).switch.setChecked(True)
+    ANSWER["q"] = QMessageBox.No
+    QTest.mouseClick(r_(AMICI).trash, Qt.LeftButton)
+    check(r_(AMICI).isVisible() and r_(AMICI).isChecked(), "canale in Copia: con «No» resta")
+    ANSWER["q"] = QMessageBox.Yes
+    QTest.mouseClick(r_(AMICI).trash, Qt.LeftButton)
+    check(not r_(AMICI).isVisible() and not r_(AMICI).isChecked() and
+          all(c["id"] != AMICI for c in eng.settings["tg_channels"]), "con «Sì» tolto e spenta la copia")
+    d.ed_filter.setText("o")
+    check(vis() == {VIP: True, FX: False, AMICI: False}, "la ricerca non fa ricomparire i tolti", vis())
+    d.ed_filter.setText("")
     d.reject()
     d = gui.SettingsDialog(win, eng, "Telegram")
     d.show()
     QTest.qWait(200)
-    check(vis() == {VIP: False, FX: True, AMICI: True}, "riaprendo l'elenco è lo stesso", vis())
-    # rimetto il canale tolto e tolgo quello aggiunto
-    d.btn_edit_list.click()
-    QTest.mouseClick(r_(VIP).pin, Qt.LeftButton)
-    QTest.mouseClick(r_(FX).pin, Qt.LeftButton)
-    d.btn_edit_list.click()
-    check(vis() == {VIP: True, FX: False, AMICI: True} and eng.settings["kept_chats"] == []
-          and eng.settings["removed_chats"] == [], "si può tornare indietro", vis())
-    # in modifica, accendere il Radar blocca il canale come «Sempre»
-    d.btn_edit_list.click()
-    r_(FX).radar.setChecked(True)
-    check(r_(FX).pin.text() == "✓ Sempre", "canale nel Radar: sempre nell'elenco")
-    r_(FX).radar.setChecked(False)
-    check(r_(FX).pin.text() == "＋ Aggiungi", "spento il Radar torna come prima")
+    d.load_channels()                     # anche «Aggiorna elenco» non li rimette
+    check(vis() == {VIP: True, FX: False, AMICI: False}, "riaprendo restano tolti", vis())
     d.resize(940, 660)
     QTest.qWait(50)
-    d.grab().save(str(TMP / "elenco.png"))
-    d.btn_edit_list.click()
+    d.grab().save(str(TMP / "cestino.png"))
+    for head, sw in zip(d.col_heads, (r_(VIP).radar, r_(VIP).switch)):
+        need = head.fontMetrics().horizontalAdvance(head.text()) + 6
+        hc = head.mapTo(d, head.rect().center()).x()
+        sc = sw.mapTo(d, sw.rect().center()).x()
+        check(need <= head.width() and abs(hc - sc) <= 2, f"intestazione {head.text()} intera e centrata",
+              (need, head.width(), hc, sc))
+    d.btn_restore.click()
+    check(all(vis().values()) and eng.settings["removed_chats"] == [] and not d.btn_restore.isVisible(),
+          "«Ripristina» li rimette tutti")
+    for r in d.rows:
+        r.switch.setChecked(r.cid == AMICI)        # come prima: solo «Gruppo Amici» in Copia
     before = eng.settings.get()
     d.save()
-    check(eng.settings.get() == before, "salvare non cambia l'elenco")
+    check({k for k in before if before[k] != eng.settings.get()[k]} == set(), "salvare non cambia niente")
 
     # ---------------------------------------------------- 4) MetaTrader: installa il ponte
     experts = TMP / "home/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Experts"

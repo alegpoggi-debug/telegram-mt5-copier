@@ -1,3 +1,4 @@
-3.7
-Nuovo pulsante «Modifica elenco» nella pagina Telegram: scegli tu quali canali tenere nell'elenco, anche quelli che non hanno ancora inviato segnali.
-Le tue scelte restano anche quando ricontrolli i canali con segnali.
+3.8
+Tolta la funzione «Solo canali con segnali» / «Modifica elenco».
+Nuovo cestino 🗑 accanto al nome di ogni canale per toglierlo dall'elenco («Ripristina tolti» per rimetterli).
+Sistemata la scritta RADAR sopra gli interruttori (non è più tagliata).
