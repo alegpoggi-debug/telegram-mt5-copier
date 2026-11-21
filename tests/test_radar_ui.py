@@ -21,6 +21,7 @@ import telethon  # noqa: E402
 OFFSET = 7200          # broker GMT+2 (novembre)
 NOW_UTC = time.time()
 CH = -1001112223334
+CH2 = -1005556667778
 
 
 def price(t_server):
@@ -81,13 +82,14 @@ class FakeClient:
         self.cache_ok = True
 
     async def iter_dialogs(self):
-        for cid, n in ((CH, "Canale Radar"), (-1009, "Canale Copia")):
+        for cid, n in ((CH, "Canale Radar"), (CH2, "Secondo Canale"), (-1009, "Canale Copia")):
             yield types.SimpleNamespace(id=cid, name=n, is_channel=True, is_group=False, entity=None)
 
     async def iter_messages(self, cid, limit=None):
         if not self.cache_ok:
             raise ValueError("Could not find the input entity")   # come Telethon se il canale non è in memoria
-        for m in reversed(MESSAGES):       # dal più recente
+        msgs = MESSAGES if cid == CH else [m for m in MESSAGES if "BUY" in m.message]
+        for m in reversed(msgs):       # dal più recente
             yield m
 
     async def disconnect(self):
@@ -192,7 +194,7 @@ def main():
     # ---------------------------------------------------- interruttore Radar accanto ai canali
     d = gui.SettingsDialog(win, eng, "Telegram")
     d.show()
-    wait_until(lambda: len(d.rows) == 2, 5)
+    wait_until(lambda: len(d.rows) == 3, 5)
     row = next(r for r in d.rows if r.cid == CH)
     QTest.mouseClick(row.radar, Qt.LeftButton)
     QTest.qWait(100)
@@ -224,8 +226,18 @@ def main():
     check(st["executed"] >= 8 and st["wins"] + st["losses"] + st["open"] <= st["executed"], "segnali simulati", st)
     statuses = {s.status for s in rep.signals}
     check(statuses <= {"vinto", "perso", "pareggio", "aperto"}, "esiti validi", statuses)
-    check(rw.t_sig.rowCount() == 10 and rw.t_msg.rowCount() == len(MESSAGES), "tabelle segnali e messaggi",
-          (rw.t_sig.rowCount(), rw.t_msg.rowCount()))
+    cards = rw.feed_cards()
+    check(rw.t_sig.rowCount() == 10 and len(cards) == len(MESSAGES), "messaggi e tabella dei segnali",
+          (rw.t_sig.rowCount(), len(cards)))
+    first_card_date = cards[0].findChildren(type(rw.lbl_name))[0].text()
+    check("/" in first_card_date and ":" in first_card_date, "data e ora di ogni messaggio", first_card_date)
+    minis = [c.findChild(radar_ui.MiniChart) for c in cards]
+    with_chart = [m for m in minis if m is not None]
+    check(len(with_chart) == st["executed"] and all(len(m.sig.spark) > 5 for m in with_chart),
+          "miniatura del grafico accanto a ogni segnale eseguito", (len(with_chart), st["executed"]))
+    outcomes = {radar_ui._outcome(m.sig) for m in with_chart}
+    check(outcomes <= {"TP", "SL", "Pareggio", "TP + pareggio", "Chiuso dal canale", "TP + SL", "Aperto"} and
+          ("TP" in outcomes or "SL" in outcomes), "esito accanto alla miniatura (TP / SL / pareggio)", outcomes)
     check(all(p.isVisible() for p in rw.pills) and "€" in rw.pills[2].text() and "punti" in rw.pills[2].text(),
           "riepilogo in euro (conto in EUR) con i punti", rw.pills[2].text())
     check(rep.spreads == {"XAUUSD.m": 25} and "spread considerato: XAUUSD.m 25 punti" in rw.lbl_progress.text(),
@@ -238,32 +250,75 @@ def main():
     check(all(abs((x.entry_p - x.entry) - 0.30) < 0.25 for x in done if x.side == "buy" and x.entry),
           "BUY: entrata con lo spread storico (30 punti)")
     # commissione: abbassa il risultato di 7 € × lotto × posizioni
-    rw.sp_lot.setValue(0.10)
+    def set_estimate(lot, comm):
+        dlg = radar_ui.RadarSettingsDialog(rw, eng)
+        dlg.sp_lot.setValue(lot)
+        dlg.sp_comm.setValue(comm)
+        dlg.save()
+        rw.reload_channels()
+    set_estimate(0.10, 0.0)
     base, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc, 0.0)
-    rw.sp_comm.setValue(7.0)
+    set_estimate(0.10, 7.0)
     withc, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc, 7.0)
     check(abs((base["money"] - withc["money"]) - 7.0 * 0.10 * len(done)) < 0.05, "commissione per lotto sottratta",
           (base["money"], withc["money"]))
     check(radar.prefs().get("commission") == 7.0, "commissione ricordata")
-    rw.sp_comm.setValue(0.0)
-    # scelta del lotto: la stima in denaro cambia subito, i punti no
-    rw.sp_lot.setValue(0.01)
+    set_estimate(0.01, 0.0)
     m1, _ = radar.summarize(rep.signals, rep.messages, 0, 0.01, rep.usd_to_acc)
     txt1 = rw.pills[2].text()
-    rw.sp_lot.setValue(0.10)
+    set_estimate(0.10, 0.0)
     m10, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc)
     check(abs(m10["money"] - 10 * m1["money"]) < 0.11 and txt1 != rw.pills[2].text(), "lotto 0,10 = 10 volte 0,01",
           (m1["money"], m10["money"]))
-    check(radar.prefs().get("lot") == 0.1, "lotto scelto ricordato")
+    check(radar.prefs().get("lot") == 0.1 and "0.1 lotti" in rw.lbl_lot.text(), "lotto scelto ricordato e mostrato")
     cell = rw.t_sig.item(0, 7).text()
     check(("€" in cell) or cell == "", "risultato di ogni segnale in euro", cell)
-    check("€" in rw.nav.item(0).text() or "punti" in rw.nav.item(0).text(), "classifica a sinistra aggiornata",
-          rw.nav.item(0).text())
-    notes = [rw.t_msg.item(r, 3).text() for r in range(rw.t_msg.rowCount())]
+    check("€" in rw.channel_gain_text(0), "guadagno del canale accanto al nome", rw.channel_gain_text(0))
+    notes = [m.note for m in rep.messages]
     check(notes.count("doppio: ignorato") == 4 and "gestione" in notes, "nota dei messaggi", notes)
     # coerenza: i punti in alto sono la somma dei segnali
     check(abs(sum(s.points for s in rep.signals if s.status in ("vinto", "perso", "pareggio", "aperto")) - st["points"]) < 0.5,
           "totale coerente")
+
+    # due canali nel Radar: ognuno con il suo guadagno separato
+    eng.settings.update({"radar_channels": [{"id": CH, "name": "Canale Radar"}, {"id": CH2, "name": "Secondo Canale"}]})
+    rw.reload_channels()
+    rw.nav.setCurrentRow(1)
+    rw.btn_run.click()
+    wait_until(lambda: not rw.running and rw.report is not None and rw.report.channel_id == CH2, 60)
+    g1, g2 = rw.channel_gain_text(0), rw.channel_gain_text(1)
+    rep2 = radar.load_report(CH2)
+    check(rep2.stats["signals"] == 5 and g1 != g2 and "€" in g1 and "€" in g2, "guadagni dei canali separati", (g1, g2))
+    check(len(rw.feed_cards()) == 5 + 2, "messaggi del secondo canale (5 segnali + 2 doppioni)", len(rw.feed_cards()))
+    rw.nav.setCurrentRow(0)
+    check(rw.report.channel_id == CH and len(rw.feed_cards()) == len(MESSAGES), "clic su un canale: i suoi messaggi")
+
+    # impostazioni del Radar: valgono solo per il Radar, la copia non cambia
+    copier_before = eng.settings.get()
+    dlg = radar_ui.RadarSettingsDialog(rw, eng)
+    check(dlg.cb_tp.currentData() == copier_before["multi_tp_mode"] and dlg.sw_follow_be.isChecked() ==
+          copier_before["follow_breakeven"], "il menu del Radar parte dalle impostazioni del copiatore")
+    dlg.cb_tp.setCurrentIndex(dlg.cb_tp.findData("first"))
+    dlg.sp_be_after.setValue(150)
+    dlg.sw_be_tp1.setChecked(False)
+    dlg.save()
+    check(eng.settings.get() == copier_before, "le impostazioni del Radar non toccano la copia vera")
+    eff = radar.effective_settings(eng.settings.get())
+    check(eff["multi_tp_mode"] == "first" and eff["be_after_points"] == 150 and not eff["be_on_tp1"],
+          "il Radar usa le sue impostazioni")
+    rw.show_saved()
+    check("impostazioni del Radar cambiate" in rw.lbl_progress.text(), "avviso: analisi da aggiornare")
+    rw.btn_run.click()
+    wait_until(lambda: not rw.running, 60)
+    check(rw.report.settings_sig == radar.settings_sig(eff) and "cambiate" not in rw.lbl_progress.text(),
+          "analisi rifatta con le impostazioni del Radar")
+    dlg = radar_ui.RadarSettingsDialog(rw, eng)
+    dlg.like_copier()
+    check(dlg.cb_tp.currentData() == copier_before["multi_tp_mode"] and dlg.sp_be_after.value() ==
+          copier_before["be_after_points"], "«Come il copiatore» riporta le impostazioni della copia")
+    dlg.save()
+    rw.btn_run.click()
+    wait_until(lambda: not rw.running, 60)
 
     # seconda analisi: i prezzi sono già salvati sul disco
     calls = ea.rates_calls
@@ -289,18 +344,24 @@ def main():
     rw.close()
     radar_ui.RadarWindow._instance = None
     rw = radar_ui.RadarWindow.show_for(win, eng)
-    check(rw.report is not None and rw.t_sig.rowCount() == 10, "risultati salvati e mostrati alla riapertura")
+    check(rw.report is not None and rw.t_sig.rowCount() == 10 and rw.nav.count() == 2,
+          "risultati salvati e mostrati alla riapertura")
 
     # grafico di un segnale
-    rw.resize(1200, 800)
+    rw.resize(1240, 840)
     QTest.qWait(100)
     rw.grab().save(str(TMP / "radar.png"))
     rw._tab(1)
     QTest.qWait(50)
-    rw.grab().save(str(TMP / "radar_messaggi.png"))
+    rw.grab().save(str(TMP / "radar_tabella.png"))
     rw._tab(0)
-    row = next(r for r in range(rw.t_sig.rowCount()) if rw.t_sig.item(r, 6).text() in ("vinto", "perso"))
-    rw.t_sig.cellDoubleClicked.emit(row, 0)
+    sd = radar_ui.RadarSettingsDialog(rw, eng)
+    sd.show()
+    QTest.qWait(50)
+    sd.grab().save(str(TMP / "radar_impostazioni.png"))
+    sd.reject()
+    mini = next(m for m in (c.findChild(radar_ui.MiniChart) for c in rw.feed_cards()) if m is not None)
+    QTest.mouseClick(mini, Qt.LeftButton)
     dlg = next(c for c in rw.children() if isinstance(c, radar_ui.RadarTradeChart))
     ok = wait_until(lambda: len(dlg.chart.bars) > 10, 15)
     check(ok and dlg.chart.trade.entry_time and dlg.chart.trade.exit_time, "grafico del segnale simulato")

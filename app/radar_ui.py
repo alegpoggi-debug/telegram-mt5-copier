@@ -4,11 +4,11 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDoubleSpinBox, QHBoxLayout, QHeaderView, QListWidget, QListWidgetItem,
-    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QComboBox, QDialog, QDoubleSpinBox, QFrame, QHBoxLayout, QHeaderView, QListWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import chart, gui, radar
@@ -89,12 +89,334 @@ class EquityChart(QWidget):
         p.drawText(QRectF(r.right() - 260, r.bottom() - 8, 260, 16), Qt.AlignRight, self.fmt(vals[-1]))
 
 
+OUTCOME_COLOR = {"TP": gui.GREEN, "TP + pareggio": gui.GREEN, "SL": gui.RED, "Pareggio": gui.MUTED,
+                 "Chiuso dal canale": gui.BLUE, "TP + SL": gui.AMBER, "Aperto": gui.BLUE, "Chiuso": gui.MUTED}
+OUTCOME_ICON = {"TP": "✓", "TP + pareggio": "✓", "SL": "✗", "Pareggio": "=", "Chiuso dal canale": "■",
+                "TP + SL": "±", "Aperto": "●", "Chiuso": "■"}
+
+
+def _outcome(sig):
+    """Esito leggibile di un segnale (anche per i report salvati prima di questa versione)."""
+    if sig.exit_reason:
+        return sig.exit_reason
+    return {"vinto": "TP", "perso": "SL", "pareggio": "Pareggio", "aperto": "Aperto"}.get(sig.status, "")
+
+
+# ============================================================================ elementi grafici
+class ChannelItem(QWidget):
+    """Riga di un canale nell'elenco a sinistra: nome e guadagno accanto."""
+
+    def __init__(self, name):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        left = QVBoxLayout()
+        left.setSpacing(1)
+        self.lbl_name = gui._label(name)
+        self.lbl_name.setTextFormat(Qt.PlainText)
+        self.lbl_sub = gui._label("", "muted")
+        left.addWidget(self.lbl_name)
+        left.addWidget(self.lbl_sub)
+        self.lbl_gain = gui._label("")
+        self.lbl_gain.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lay.addLayout(left, 1)
+        lay.addWidget(self.lbl_gain)
+
+    def set_result(self, gain_text, color, sub):
+        self.lbl_gain.setText(f'<span style="color:{color}; font-weight:600">{gain_text}</span>')
+        self.lbl_sub.setText(sub)
+
+
+class MiniChart(QWidget):
+    """Miniatura del grafico di un segnale: prezzo, entrata, uscita, SL e TP."""
+
+    def __init__(self, sig, on_click=None):
+        super().__init__()
+        self.sig = sig
+        self.on_click = on_click
+        self.setFixedSize(190, 92)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Clicca per aprire il grafico")
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_click:
+            self.on_click(self.sig)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        box = QPainterPath()
+        box.addRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
+        p.fillPath(box, QColor(gui.BG))
+        p.setPen(QPen(QColor(gui.BORDER), 1))
+        p.drawPath(box)
+        sp = self.sig.spark
+        if len(sp) < 2:
+            p.setPen(QColor(gui.FAINT))
+            p.drawText(self.rect(), Qt.AlignCenter, "grafico non disponibile")
+            return
+        r = QRectF(8, 8, self.width() - 16, self.height() - 16)
+        t0, t1 = sp[0][0], sp[-1][0]
+        lo = min(x[3] if len(x) > 3 else x[1] for x in sp)
+        hi = max(x[2] if len(x) > 2 else x[1] for x in sp)
+        sig = self.sig
+        for v in (sig.entry_p, sig.exit_p):
+            if v:
+                lo, hi = min(lo, v), max(hi, v)
+        span = (hi - lo) or abs(hi) * 0.001 or 1
+        lo, hi = lo - span * 0.12, hi + span * 0.12
+
+        def X(t):
+            return r.left() + (t - t0) / max(t1 - t0, 1) * r.width()
+
+        def Y(v):
+            return r.top() + (hi - v) / (hi - lo) * r.height()
+        win = sig.points >= 0
+        res_col = QColor(gui.GREEN if win else gui.RED)
+        if sig.entry_t:
+            xe = X(sig.entry_t)
+            xo = X(sig.exit_t) if sig.exit_t else r.right()
+            band = QColor(res_col)
+            band.setAlpha(28)
+            p.fillRect(QRectF(min(xe, xo), r.top(), max(2, abs(xo - xe)), r.height()), band)
+        for lv, col in ((sig.sl_now or sig.sl, gui.RED), (sig.tp_first, gui.GREEN)):
+            if lv and lo <= lv <= hi:
+                c = QColor(col)
+                c.setAlpha(170)
+                p.setPen(QPen(c, 1, Qt.DashLine))
+                p.drawLine(QPointF(r.left(), Y(lv)), QPointF(r.right(), Y(lv)))
+        path = QPainterPath(QPointF(X(sp[0][0]), Y(sp[0][1])))
+        for x in sp[1:]:
+            path.lineTo(QPointF(X(x[0]), Y(x[1])))
+        p.setPen(QPen(QColor(gui.TEXT), 1.3))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+        if sig.entry_t and sig.entry_p:
+            xe, ye = X(sig.entry_t), Y(sig.entry_p)
+            buy = sig.side == "buy"
+            col = QColor(gui.GREEN if buy else gui.RED)
+            s6 = 6
+            tri = ([QPointF(xe, ye + 2), QPointF(xe - s6, ye + 2 + s6 * 1.4), QPointF(xe + s6, ye + 2 + s6 * 1.4)] if buy else
+                   [QPointF(xe, ye - 2), QPointF(xe - s6, ye - 2 - s6 * 1.4), QPointF(xe + s6, ye - 2 - s6 * 1.4)])
+            from PySide6.QtGui import QPolygonF
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+            p.drawPolygon(QPolygonF(tri))
+            if sig.exit_t and sig.exit_p and sig.status != "aperto":
+                xo, yo = X(sig.exit_t), Y(sig.exit_p)
+                line = QColor(res_col)
+                line.setAlpha(200)
+                p.setPen(QPen(line, 1.2, Qt.DashLine))
+                p.drawLine(QPointF(xe, ye), QPointF(xo, yo))
+                p.setPen(QPen(res_col, 2))
+                p.setBrush(QColor(gui.BG))
+                p.drawEllipse(QPointF(xo, yo), 4, 4)
+
+
+class MessageCard(QFrame):
+    """Un messaggio del canale: data e ora, testo, come è stato letto e, per i segnali, miniatura ed esito."""
+
+    def __init__(self, msg, sig, money_text, on_chart):
+        super().__init__()
+        self.setObjectName("msgcard")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(14)
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        head = QHBoxLayout()
+        when = dt.datetime.fromtimestamp(msg.t, dt.timezone.utc)
+        head.addWidget(gui._label(f"<b>{when.strftime('%d/%m/%Y')}</b>&nbsp; {when.strftime('%H:%M')}"))
+        tag, tcol = {"segnale": ("SEGNALE", gui.BLUE), "gestione": ("GESTIONE", gui.MUTED),
+                     "doppio: ignorato": ("DOPPIO · IGNORATO", gui.AMBER)}.get(msg.note, ("", gui.MUTED))
+        if tag:
+            head.addWidget(gui._label(f'<span style="color:{tcol}; font-size:11px; font-weight:600">{tag}</span>'))
+        if msg.edited:
+            head.addWidget(gui._label(f'<span style="color:{gui.AMBER}; font-size:11px">✎ modificato dal canale</span>'))
+        head.addStretch(1)
+        left.addLayout(head)
+        text = gui._label(msg.text.strip()[:600], wrap=True)
+        text.setTextFormat(Qt.PlainText)
+        text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        left.addWidget(text)
+        if msg.note not in ("doppio: ignorato",):
+            left.addWidget(gui._label(msg.reading, "muted", wrap=True))
+        lay.addLayout(left, 1)
+        if sig is not None:
+            right = QVBoxLayout()
+            right.setSpacing(4)
+            if sig.entry_t:
+                right.addWidget(MiniChart(sig, on_chart))
+                out = _outcome(sig)
+                col = OUTCOME_COLOR.get(out, gui.MUTED)
+                res = f"{OUTCOME_ICON.get(out, '')} {out}"
+                detail = f"{_pts(sig.points)} pt" + (f" · {money_text}" if money_text else "")
+                lbl = gui._label(f'<span style="color:{col}; font-weight:600">{res}</span>&nbsp; '
+                                 f'<span style="color:{col}">{detail}</span>')
+                lbl.setAlignment(Qt.AlignCenter)
+                right.addWidget(lbl)
+            else:
+                why = sig.status.replace("ignorato: ", "Non copiato: ") if sig.status else ""
+                lbl = gui._label(why, "muted", wrap=True)
+                lbl.setFixedWidth(190)
+                right.addWidget(lbl)
+            right.addStretch(1)
+            lay.addLayout(right)
+
+
 class _Progress(QObject):
     text = Signal(str)
 
 
+# ============================================================================ impostazioni del Radar
+class RadarSettingsDialog(QDialog):
+    """Menu a parte con le impostazioni usate solo dal Radar (la copia vera non cambia)."""
+
+    def __init__(self, parent, engine):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Impostazioni del Radar")
+        self.setStyleSheet(gui.STYLE)
+        self.setMinimumSize(620, 520)
+        gui._fit_to_screen(self, 760, 760)
+        s = radar.effective_settings(engine.settings.get())
+        pr = radar.prefs()
+
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(4, 4, 8, 4)
+        lay.setSpacing(12)
+        lay.addWidget(gui._label("Impostazioni del Radar", "h1"))
+        lay.addWidget(gui._label("Valgono solo per le stime del Radar: puoi provare scelte diverse senza cambiare "
+                                 "la copia vera.", "muted", wrap=True))
+
+        c1, l1 = gui._card(spacing=14)
+        l1.addWidget(gui._label("STIMA", "section"))
+        self.sp_lot = self._dspin(0.01, 100, 2, 0.01, float(pr.get("lot", engine.settings["fixed_lot"])))
+        self._row(l1, "Lotto per operazione", "Con quanti lotti faresti ogni operazione.", self.sp_lot)
+        self.sp_comm = self._dspin(0, 1000, 2, 0.5, float(pr.get("commission", 0.0)))
+        self._row(l1, "Commissione per lotto", "Andata e ritorno, nella valuta del conto. 0 per i conti senza "
+                  "commissioni (Standard).", self.sp_comm)
+        lay.addWidget(c1)
+
+        c2, l2 = gui._card(spacing=14)
+        l2.addWidget(gui._label("SEGNALI", "section"))
+        self.cb_tp = self._combo([("split", "Una posizione per ogni TP"), ("first", "Solo il primo TP"),
+                                  ("last", "Solo l'ultimo TP")], s["multi_tp_mode"])
+        self._row(l2, "Segnali con più TP", None, self.cb_tp)
+        self.cb_nosl = self._combo([("ignore", "Ignora il segnale"), ("default", "Usa uno SL predefinito"),
+                                    ("none", "Apri senza SL")], s["no_sl_mode"])
+        self._row(l2, "Segnali senza Stop Loss", None, self.cb_nosl)
+        self.sp_slpts = self._ispin(1, 1000000, s["default_sl_points"], " punti")
+        self._row(l2, "SL predefinito", "Usato se scegli «Usa uno SL predefinito».", self.sp_slpts)
+        self.sw_dup = gui.Switch(s["ignore_duplicates"])
+        self._row(l2, "Ignora i messaggi doppi", "Lo stesso segnale ripetuto conta una volta sola.", self.sw_dup)
+        self.sp_dup = self._ispin(1, 1440, s["duplicate_window_min"], " minuti")
+        self._row(l2, "Considera doppi entro", None, self.sp_dup)
+        lay.addWidget(c2)
+
+        c3, l3 = gui._card(spacing=14)
+        l3.addWidget(gui._label("PAREGGIO", "section"))
+        self.sw_follow_be = gui.Switch(s["follow_breakeven"])
+        self._row(l3, "Segui il pareggio del canale", "Quando il canale scrive «SL a pareggio», lo Stop Loss va "
+                  "all'entrata.", self.sw_follow_be)
+        self.sw_be_tp1 = gui.Switch(s["be_on_tp1"])
+        self._row(l3, "Pareggio dopo il primo TP", "Quando una posizione chiude in TP, le altre vanno a pareggio.",
+                  self.sw_be_tp1)
+        self.sp_be_after = self._ispin(0, 1000000, s["be_after_points"], " punti")
+        self._row(l3, "Pareggio automatico dopo", "Quando guadagna questi punti va a pareggio da solo. 0 = no.",
+                  self.sp_be_after)
+        self.sp_be_off = self._ispin(-10000, 10000, s["be_offset_points"], " punti")
+        self._row(l3, "Margine del pareggio", "Entrata più questi punti.", self.sp_be_off)
+        lay.addWidget(c3)
+
+        c4, l4 = gui._card(spacing=14)
+        l4.addWidget(gui._label("GESTIONE", "section"))
+        self.cb_tphit = self._combo([("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"),
+                                     ("partial", "Chiudi metà"), ("partial_be", "Chiudi metà e SL a pareggio")],
+                                    s["tp_hit_action"])
+        self._row(l4, "Messaggio «TP raggiunto»", None, self.cb_tphit)
+        lay.addWidget(c4)
+        lay.addStretch(1)
+
+        from PySide6.QtWidgets import QScrollArea
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setWidget(body)
+        bottom = QHBoxLayout()
+        bottom.addWidget(gui._btn("Come il copiatore", self.like_copier))
+        bottom.addStretch(1)
+        bottom.addWidget(gui._btn("Annulla", self.reject))
+        bottom.addWidget(gui._btn("Salva", self.save, "primary"))
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 14)
+        root.addWidget(sc, 1)
+        root.addLayout(bottom)
+
+    def _row(self, lay, title, desc, control):
+        r = QHBoxLayout()
+        r.setSpacing(16)
+        t = QVBoxLayout()
+        t.setSpacing(2)
+        t.addWidget(gui._label(title))
+        if desc:
+            t.addWidget(gui._label(desc, "muted", wrap=True))
+        r.addLayout(t, 1)
+        r.addWidget(control, 0, Qt.AlignRight | Qt.AlignVCenter)
+        lay.addLayout(r)
+
+    def _dspin(self, lo, hi, dec, step, val):
+        w = QDoubleSpinBox()
+        w.setRange(lo, hi)
+        w.setDecimals(dec)
+        w.setSingleStep(step)
+        w.setValue(val)
+        return gui._clean_spin(w)
+
+    def _ispin(self, lo, hi, val, suffix):
+        w = QSpinBox()
+        w.setRange(lo, hi)
+        w.setSuffix(suffix)
+        w.setValue(int(val))
+        return gui._clean_spin(w)
+
+    def _combo(self, opts, val):
+        w = QComboBox()
+        for v, t in opts:
+            w.addItem(t, v)
+        w.setCurrentIndex(max(0, w.findData(val)))
+        return w
+
+    def values(self) -> dict:
+        return {"multi_tp_mode": self.cb_tp.currentData(), "no_sl_mode": self.cb_nosl.currentData(),
+                "default_sl_points": self.sp_slpts.value(), "ignore_duplicates": self.sw_dup.isChecked(),
+                "duplicate_window_min": self.sp_dup.value(), "follow_breakeven": self.sw_follow_be.isChecked(),
+                "be_on_tp1": self.sw_be_tp1.isChecked(), "be_after_points": self.sp_be_after.value(),
+                "be_offset_points": self.sp_be_off.value(), "tp_hit_action": self.cb_tphit.currentData()}
+
+    def like_copier(self):
+        c = self.engine.settings.get()
+        for combo, key in ((self.cb_tp, "multi_tp_mode"), (self.cb_nosl, "no_sl_mode"), (self.cb_tphit, "tp_hit_action")):
+            combo.setCurrentIndex(max(0, combo.findData(c[key])))
+        self.sp_slpts.setValue(c["default_sl_points"])
+        self.sw_dup.setChecked(c["ignore_duplicates"])
+        self.sp_dup.setValue(c["duplicate_window_min"])
+        self.sw_follow_be.setChecked(c["follow_breakeven"])
+        self.sw_be_tp1.setChecked(c["be_on_tp1"])
+        self.sp_be_after.setValue(c["be_after_points"])
+        self.sp_be_off.setValue(c["be_offset_points"])
+        self.sp_lot.setValue(c["fixed_lot"])
+
+    def save(self):
+        radar.save_prefs(lot=round(self.sp_lot.value(), 2), commission=round(self.sp_comm.value(), 2),
+                         settings=self.values())
+        self.accept()
+
+
+# ============================================================================ finestra
 class RadarWindow(QDialog):
     _instance = None
+    PAGE = 150          # messaggi mostrati alla volta
 
     @classmethod
     def show_for(cls, parent, engine):
@@ -112,29 +434,35 @@ class RadarWindow(QDialog):
         self.engine = engine
         self.report: radar.Report | None = None
         self.running = False
+        self.shown = self.PAGE
         self.setWindowTitle("Radar")
         self.setStyleSheet(gui.STYLE + f"""
             QPushButton#seg {{ background: transparent; border: none; color: {gui.MUTED}; padding: 5px 10px; border-radius: 6px; }}
-            QPushButton#seg:checked {{ background: {gui.SURFACE2}; color: {gui.TEXT}; }}""")
-        self.setMinimumSize(900, 600)
-        gui._fit_to_screen(self, 1200, 800)
+            QPushButton#seg:checked {{ background: {gui.SURFACE2}; color: {gui.TEXT}; }}
+            QFrame#msgcard {{ background: {gui.SURFACE}; border: 1px solid {gui.BORDER}; border-radius: 10px; }}
+            QListWidget#nav::item {{ padding: 0; }}""")
+        self.setMinimumSize(980, 640)
+        gui._fit_to_screen(self, 1240, 840)
         self._prog = _Progress()
         self._prog.text.connect(lambda t: self.lbl_progress.setText(t))
 
-        # ---- sinistra: canali osservati
+        # ---- sinistra: canali osservati, ognuno con il suo guadagno
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
-        self.nav.setFixedWidth(250)
+        self.nav.setFixedWidth(280)
         self.nav.currentRowChanged.connect(lambda _r: self.show_saved())
         left = QVBoxLayout()
         left.setContentsMargins(14, 18, 6, 14)
         left.addWidget(gui._label("Radar", "h1"))
-        left.addWidget(gui._label("Come sarebbero andati i canali che osservi, con le tue impostazioni. "
-                                  "Non apre nessuna operazione.", "muted", wrap=True))
+        left.addWidget(gui._label("Come sarebbero andati i canali che osservi. Non apre nessuna operazione.",
+                                  "muted", wrap=True))
         left.addSpacing(8)
         left.addWidget(self.nav, 1)
+        self.lbl_lot = gui._label("", "muted", wrap=True)
+        left.addWidget(self.lbl_lot)
+        left.addWidget(gui._btn("Impostazioni del Radar", self.open_settings))
 
-        # ---- destra: dettaglio
+        # ---- destra: dettaglio del canale
         self.lbl_name = gui._label("", "h2")
         self.cb_days = QComboBox()
         for d in (7, 30, 60, 90):
@@ -142,31 +470,8 @@ class RadarWindow(QDialog):
         self.cb_days.setCurrentIndex(max(0, self.cb_days.findData(int(engine.settings["radar_days"]))))
         self.cb_days.setMinimumWidth(170)
         self.btn_run = gui._btn("Aggiorna", self.run_scan, "primary")
-        self.sp_lot = QDoubleSpinBox()
-        self.sp_lot.setRange(0.01, 100)
-        self.sp_lot.setDecimals(2)
-        self.sp_lot.setSingleStep(0.01)
-        self.sp_lot.setValue(float(radar.prefs().get("lot", engine.settings["fixed_lot"])))
-        gui._clean_spin(self.sp_lot, 90)
-        self.sp_lot.setToolTip("Con quanti lotti faresti ogni operazione: la stima in denaro si aggiorna subito")
-        self.sp_lot.valueChanged.connect(self._lot_changed)
-        self.sp_comm = QDoubleSpinBox()
-        self.sp_comm.setRange(0, 1000)
-        self.sp_comm.setDecimals(2)
-        self.sp_comm.setSingleStep(0.5)
-        self.sp_comm.setValue(float(radar.prefs().get("commission", 0.0)))
-        gui._clean_spin(self.sp_comm, 80)
-        self.sp_comm.setToolTip("Commissione del tuo conto per 1 lotto, andata e ritorno, nella valuta del conto "
-                                "(es. 7). Lascia 0 se il conto non ha commissioni (conti Standard).")
-        self.sp_comm.valueChanged.connect(self._lot_changed)
         head = QHBoxLayout()
         head.addWidget(self.lbl_name, 1)
-        head.addWidget(gui._label("Lotto", "muted"))
-        head.addWidget(self.sp_lot)
-        head.addSpacing(6)
-        head.addWidget(gui._label("Commissione/lotto", "muted"))
-        head.addWidget(self.sp_comm)
-        head.addSpacing(8)
         head.addWidget(self.cb_days)
         head.addWidget(self.btn_run)
         self.lbl_progress = gui._label("", "muted", wrap=True)
@@ -181,32 +486,39 @@ class RadarWindow(QDialog):
         eq_card, eq = gui._card(margins=10)
         eq.addWidget(gui._label("RISULTATO NEL TEMPO", "section"))
         self.equity = EquityChart()
+        self.equity.setMinimumHeight(100)
+        self.equity.setMaximumHeight(130)
         eq.addWidget(self.equity)
 
         tab_row = QHBoxLayout()
-        self.btn_sig = QPushButton("Segnali")
-        self.btn_msg = QPushButton("Messaggi del canale")
-        for i, b in enumerate((self.btn_sig, self.btn_msg)):
+        self.btn_msg = QPushButton("Messaggi")
+        self.btn_sig = QPushButton("Tabella dei segnali")
+        for i, b in enumerate((self.btn_msg, self.btn_sig)):
             b.setObjectName("seg")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _c, k=i: self._tab(k))
             tab_row.addWidget(b)
         tab_row.addStretch(1)
-        tab_row.addWidget(gui._label("Doppio clic su un segnale: grafico", "muted"))
-        self.btn_sig.setChecked(True)
+        tab_row.addWidget(gui._label("Clicca una miniatura per il grafico grande", "muted"))
+        self.btn_msg.setChecked(True)
 
+        self.feed = QScrollArea()
+        self.feed.setWidgetResizable(True)
+        self.feed_box = QWidget()
+        self.feed_lay = QVBoxLayout(self.feed_box)
+        self.feed_lay.setContentsMargins(0, 0, 6, 0)
+        self.feed_lay.setSpacing(8)
+        self.feed_lay.addStretch(1)
+        self.feed.setWidget(self.feed_box)
         self.t_sig = self._table(["DATA", "SIMBOLO", "TIPO", "ENTRATA", "SL", "TP", "ESITO", "RISULTATO"])
         self.t_sig.cellDoubleClicked.connect(self.open_signal_chart)
-        self.t_msg = self._table(["DATA", "MESSAGGIO", "COME È STATO LETTO", "NOTA"])
-        self.t_msg.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.t_msg.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.tabs = QStackedWidget()
+        self.tabs.addWidget(self.feed)
         self.tabs.addWidget(self.t_sig)
-        self.tabs.addWidget(self.t_msg)
-        list_card, lc = gui._card(margins=10)
-        lc.addLayout(tab_row)
-        lc.addWidget(self.tabs, 1)
+        list_box = QVBoxLayout()
+        list_box.addLayout(tab_row)
+        list_box.addWidget(self.tabs, 1)
 
         self.empty = gui._label("", "muted", wrap=True)
         self.empty.setAlignment(Qt.AlignCenter)
@@ -219,7 +531,7 @@ class RadarWindow(QDialog):
         d.addWidget(self.lbl_progress)
         d.addLayout(pills)
         d.addWidget(eq_card)
-        d.addWidget(list_card, 1)
+        d.addLayout(list_box, 1)
 
         right = QVBoxLayout()
         right.setContentsMargins(6, 16, 18, 14)
@@ -230,6 +542,7 @@ class RadarWindow(QDialog):
         root.addLayout(left)
         root.addLayout(right, 1)
 
+    # ---------------------------------------------------------------- utilità
     def _table(self, headers):
         t = QTableWidget(0, len(headers))
         t.setHorizontalHeaderLabels(headers)
@@ -246,8 +559,33 @@ class RadarWindow(QDialog):
 
     def _tab(self, k):
         self.tabs.setCurrentIndex(k)
-        self.btn_sig.setChecked(k == 0)
-        self.btn_msg.setChecked(k == 1)
+        self.btn_msg.setChecked(k == 0)
+        self.btn_sig.setChecked(k == 1)
+
+    def lot(self):
+        return float(radar.prefs().get("lot", self.engine.settings["fixed_lot"]))
+
+    def commission(self):
+        return float(radar.prefs().get("commission", 0.0))
+
+    def _stats(self, rep):
+        return radar.summarize(rep.signals, rep.messages, rep.stats.get("duplicates", 0), self.lot(),
+                               getattr(rep, "usd_to_acc", None), self.commission())
+
+    def _money_text(self, sig, rep):
+        mv = radar.money_of(sig, self.lot(), rep.usd_to_acc, self.commission())
+        return _money(mv, rep.currency if (rep.usd_to_acc or rep.precise) else "USD") if mv is not None else ""
+
+    # ---------------------------------------------------------------- impostazioni
+    def open_settings(self):
+        before = radar.settings_sig(radar.effective_settings(self.engine.settings.get()))
+        dlg = RadarSettingsDialog(self, self.engine)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        after = radar.settings_sig(radar.effective_settings(self.engine.settings.get()))
+        self.reload_channels()
+        if before != after and self.current()[0] is not None:
+            self.run_scan()        # le scelte sulla simulazione richiedono di ricalcolare
 
     # ---------------------------------------------------------------- canali
     def reload_channels(self):
@@ -256,18 +594,27 @@ class RadarWindow(QDialog):
         self.nav.blockSignals(True)
         self.nav.clear()
         for c in chans:
+            it = QListWidgetItem()
+            it.setData(Qt.UserRole, int(c["id"]))
+            it.setData(Qt.UserRole + 1, c["name"])
+            w = ChannelItem(c["name"])
             rep = radar.load_report(int(c["id"]))
-            sub = "non ancora analizzato"
             if rep and rep.stats:
                 st, _eq = self._stats(rep)
                 wr = st.get("winrate")
-                res = _money(st["money"], rep.currency) if st["in_money"] else f"{_pts(st['points'])} punti"
-                sub = res + (f"  ·  {wr:.0f}% vinti" if wr is not None else "")
-            it = QListWidgetItem(f"{c['name']}\n{sub}")
-            it.setData(Qt.UserRole, int(c["id"]))
-            it.setData(Qt.UserRole + 1, c["name"])
+                if st["in_money"]:
+                    gain, col = _money(st["money"], rep.currency), gui.GREEN if st["money"] >= 0 else gui.RED
+                else:
+                    gain, col = f"{_pts(st['points'])} pt", gui.GREEN if st["points"] >= 0 else gui.RED
+                w.set_result(gain, col, f"{st['executed']} segnali" + (f" · {wr:.0f}% vinti" if wr is not None else ""))
+            else:
+                w.set_result("–", gui.FAINT, "non ancora analizzato")
+            it.setSizeHint(QSize(240, 60))
             self.nav.addItem(it)
+            self.nav.setItemWidget(it, w)
         self.nav.blockSignals(False)
+        self.lbl_lot.setText(f"Stima con {self.lot():g} lotti" + (f", commissione {self.commission():g}"
+                                                                  if self.commission() else ""))
         if not chans:
             self.detail.hide()
             self.empty.show()
@@ -280,22 +627,9 @@ class RadarWindow(QDialog):
         self.nav.setCurrentRow(idx)
         self.show_saved()
 
-    def _stats(self, rep):
-        return radar.summarize(rep.signals, rep.messages, rep.stats.get("duplicates", 0), self.sp_lot.value(),
-                               getattr(rep, "usd_to_acc", None), self.sp_comm.value())
-
-    def _lot_changed(self, _v=None):
-        radar.save_prefs(lot=round(self.sp_lot.value(), 2), commission=round(self.sp_comm.value(), 2))
-        if self.report:
-            self._fill(self.report)
-        for i in range(self.nav.count()):
-            it = self.nav.item(i)
-            rep = radar.load_report(it.data(Qt.UserRole))
-            if rep and rep.stats:
-                st, _eq = self._stats(rep)
-                wr = st.get("winrate")
-                res = _money(st["money"], rep.currency) if st["in_money"] else f"{_pts(st['points'])} punti"
-                it.setText(f"{it.data(Qt.UserRole + 1)}\n{res}" + (f"  ·  {wr:.0f}% vinti" if wr is not None else ""))
+    def channel_gain_text(self, row):
+        w = self.nav.itemWidget(self.nav.item(row))
+        return w.lbl_gain.text() if w else ""
 
     def current(self):
         it = self.nav.currentItem()
@@ -306,6 +640,7 @@ class RadarWindow(QDialog):
         if cid is None:
             return
         self.lbl_name.setText(name)
+        self.shown = self.PAGE
         rep = radar.load_report(cid)
         if rep is None:
             self.report = None
@@ -315,12 +650,16 @@ class RadarWindow(QDialog):
             return
         self._fill(rep)
         spreads = ", ".join(f"{k} {v} punti" for k, v in (rep.spreads or {}).items())
+        stale = rep.settings_sig and rep.settings_sig != radar.settings_sig(
+            radar.effective_settings(self.engine.settings.get()))
         self.lbl_progress.setText(f"Analisi del {rep.generated} · ultimi {rep.days} giorni"
                                   + (f" · spread considerato: {spreads}" if spreads else "")
                                   + (f" · {rep.note}" if rep.note else "")
                                   + (" · dati esatti dal ponte (spread storico, valore del punto, swap)" if rep.precise else
                                      " · per la massima precisione aggiorna il ponte: Impostazioni → MetaTrader → "
                                      "«Installa il ponte», poi «Compila» in MetaEditor")
+                                  + (" · ⚠ impostazioni del Radar cambiate dopo questa analisi: premi «Aggiorna»"
+                                     if stale else "")
                                   + (f" · {rep.error}" if rep.error else ""))
 
     # ---------------------------------------------------------------- analisi
@@ -364,10 +703,10 @@ class RadarWindow(QDialog):
                 x.hide()
             self.equity.set_points([])
             self.t_sig.setRowCount(0)
-            self.t_msg.setRowCount(0)
+            self._clear_feed()
             return
         st, equity = self._stats(rep)
-        lot = self.sp_lot.value()
+        lot = self.lot()
         ccy = rep.currency
         wr = st.get("winrate")
         if st["in_money"]:
@@ -396,7 +735,7 @@ class RadarWindow(QDialog):
             x.show()
         self.pills[6].setToolTip("Messaggi che il canale ha modificato dopo averli inviati")
         self.pills[5].setToolTip("Messaggi ripetuti ignorati (come fa la protezione dai doppi)")
-        self.pills[2].setToolTip(f"Con {lot:g} lotti per operazione, commissione {self.sp_comm.value():g} per lotto"
+        self.pills[2].setToolTip(f"Con {lot:g} lotti per operazione, commissione {self.commission():g} per lotto"
                                  + (", swap inclusi" if rep.precise else "")
                                  + ("" if st["in_money"] else " · importo non stimabile per questi strumenti: "
                                     "risultato in punti (aggiorna il ponte)"))
@@ -405,46 +744,71 @@ class RadarWindow(QDialog):
                                  if lim else "Segnali che la copia avrebbe eseguito")
         self.equity.set_points(equity)
 
+        # tabella dei segnali
         sigs = sorted(rep.signals, key=lambda s: -s.t)
         self.t_sig.setRowCount(len(sigs))
         for r, s in enumerate(sigs):
             entry = s.entry_p if s.entry_p is not None else s.entry
+            out = _outcome(s) if s.status in STATUS_COLOR else s.status
+            money = self._money_text(s, rep) if s.status in STATUS_COLOR else ""
             vals = [_when(s.t), s.symbol, f"{s.side.upper()}{'' if s.otype == 'market' else ' ' + s.otype.upper()}",
                     f"{entry:g}" if entry is not None else "mercato", f"{s.sl:g}" if s.sl else "–",
-                    ", ".join(f"{t:g}" for t in s.tps) or "–", s.status + ("  ✎" if s.edited else ""),
-                    (_pts(s.points) + (f"  ({_money(mv, ccy)})" if (mv := radar.money_of(
-                        s, lot, rep.usd_to_acc, self.sp_comm.value())) is not None else ""))
-                    if s.status in STATUS_COLOR else ""]
+                    ", ".join(f"{t:g}" for t in s.tps) or "–", out + ("  ✎" if s.edited else ""),
+                    (_pts(s.points) + (f"  ({money})" if money else "")) if s.status in STATUS_COLOR else ""]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
                 if c == 2:
                     it.setForeground(QColor(gui.GREEN if s.side == "buy" else gui.RED))
                 if c in (6, 7):
-                    it.setForeground(QColor(STATUS_COLOR.get(s.status, gui.FAINT)))
+                    it.setForeground(QColor(OUTCOME_COLOR.get(out, gui.FAINT)))
                 if c == 0:
                     it.setData(Qt.UserRole, s.msg_id)
                     it.setToolTip(s.text)
-                if c == 6 and s.edited:
-                    it.setToolTip("Il canale ha modificato questo segnale dopo averlo inviato: "
-                                  "la stima usa la versione finale")
                 self.t_sig.setItem(r, c, it)
+        self._fill_feed()
 
+    def _clear_feed(self):
+        while self.feed_lay.count() > 1:
+            w = self.feed_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _fill_feed(self):
+        rep = self.report
+        self._clear_feed()
+        if not rep:
+            return
+        by_id = {s.msg_id: s for s in rep.signals}
         msgs = sorted(rep.messages, key=lambda m: -m.t)
-        self.t_msg.setRowCount(len(msgs))
-        for r, m in enumerate(msgs):
-            first = m.text.strip().splitlines()[0] if m.text.strip() else ""
-            vals = [_when(m.t), first + ("  ✎" if m.edited else ""), m.reading, m.note]
-            for c, v in enumerate(vals):
-                it = QTableWidgetItem(v)
-                if c == 1:
-                    it.setToolTip(m.text + ("\n\n(messaggio modificato dal canale)" if m.edited else ""))
-                if c == 3 and "doppio" in v:
-                    it.setForeground(QColor(gui.AMBER))
-                if c == 2:
-                    it.setForeground(QColor(gui.BLUE if v.startswith("SEGNALE") else gui.MUTED))
-                self.t_msg.setItem(r, c, it)
+        pos = 0
+        for m in msgs[:self.shown]:
+            sig = by_id.get(m.msg_id) if m.note == "segnale" else None
+            card = MessageCard(m, sig, self._money_text(sig, rep) if sig and sig.entry_t else "", self.open_chart_for)
+            self.feed_lay.insertWidget(pos, card)
+            pos += 1
+        if len(msgs) > self.shown:
+            self.feed_lay.insertWidget(pos, gui._btn(f"Mostra altri messaggi ({len(msgs) - self.shown})", self._more))
+
+    def _more(self):
+        self.shown += self.PAGE
+        pos = self.feed.verticalScrollBar().value()
+        self._fill_feed()
+        self.feed.verticalScrollBar().setValue(pos)
+
+    def feed_cards(self):
+        out = []
+        for i in range(self.feed_lay.count()):
+            w = self.feed_lay.itemAt(i).widget()
+            if isinstance(w, MessageCard) and not w.property("_gone"):
+                out.append(w)
+        return out
 
     # ---------------------------------------------------------------- grafico di un segnale
+    def open_chart_for(self, sig):
+        if sig is None or sig.entry_t is None:
+            return
+        RadarTradeChart(self, self.engine, sig).show()
+
     def open_signal_chart(self, row, _col=0):
         if not self.report:
             return
@@ -475,7 +839,7 @@ class RadarTradeChart(QDialog):
         for t in (f'<span style="color:{gui.GREEN if sig.side == "buy" else gui.RED}">'
                   f'{"▲ BUY" if sig.side == "buy" else "▼ SELL"}</span>&nbsp; {sig.symbol}',
                   f"Entrata {sig.entry_p:g}", f"Uscita {sig.exit_p:g}" if sig.exit_p else "Aperta",
-                  f'Risultato <span style="color:{col}">{_pts(sig.points)} punti</span>', f"Simulato · {sig.status}"):
+                  f'Risultato <span style="color:{col}">{_pts(sig.points)} punti</span>', f"Simulato · {_outcome(sig)}"):
             info.addWidget(gui._label(t, "pill"))
         info.addStretch(1)
         card, cl = gui._card(margins=8)

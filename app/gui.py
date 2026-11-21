@@ -979,6 +979,23 @@ class SettingsDialog(QDialog):
         self.sw_be = Switch(s["be_on_tp1"])
         self._row(l4, "Pareggio dopo il primo TP", "Quando una posizione di un segnale chiude in TP, "
                   "lo Stop Loss delle altre va al prezzo di entrata.", self.sw_be)
+        self.sw_follow_be = Switch(s["follow_breakeven"])
+        self._row(l4, "Segui il pareggio del canale", "Quando il canale scrive «SL a pareggio» (o «breakeven», «BE»), "
+                  "lo Stop Loss va al prezzo di entrata.", self.sw_follow_be)
+        self.sp_be_after = QSpinBox()
+        self.sp_be_after.setRange(0, 1000000)
+        self.sp_be_after.setSuffix(" punti")
+        self.sp_be_after.setValue(s["be_after_points"])
+        _clean_spin(self.sp_be_after)
+        self._row(l4, "Pareggio automatico dopo", "Quando un'operazione guadagna questi punti, lo Stop Loss va a "
+                  "pareggio da solo. 0 = no.", self.sp_be_after)
+        self.sp_be_off = QSpinBox()
+        self.sp_be_off.setRange(-10000, 10000)
+        self.sp_be_off.setSuffix(" punti")
+        self.sp_be_off.setValue(s["be_offset_points"])
+        _clean_spin(self.sp_be_off)
+        self._row(l4, "Margine del pareggio", "Lo Stop Loss va al prezzo di entrata più questi punti, per coprire "
+                  "spread e commissioni.", self.sp_be_off)
         self.cb_tphit = QComboBox()
         for v, t in (("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"), ("partial", "Chiudi metà"),
                      ("partial_be", "Chiudi metà e SL a pareggio")):
@@ -1056,6 +1073,9 @@ class SettingsDialog(QDialog):
             "no_sl_mode": self.cb_nosl.currentData(),
             "default_sl_points": self.sp_slpts.value(),
             "be_on_tp1": self.sw_be.isChecked(),
+            "follow_breakeven": self.sw_follow_be.isChecked(),
+            "be_after_points": self.sp_be_after.value(),
+            "be_offset_points": self.sp_be_off.value(),
             "tp_hit_action": self.cb_tphit.currentData(),
             "hours_enabled": self.sw_hours.isChecked(),
             "hours_start": self.tm_start.time().toString("HH:mm"),

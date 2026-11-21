@@ -85,6 +85,7 @@ def main():
     app = QApplication([])
     ui = gui.UiBridge()
     eng = Engine(ui)
+    eng.settings.update({"days": list(range(7))})   # le prove devono funzionare anche nel weekend
     win = gui.MainWindow(ui, eng)
     win.show()
     eng.start()
@@ -136,6 +137,15 @@ def main():
     d.sp_dup.setValue(5)
     d.save()
     check(eng.settings["ignore_duplicates"] is True and eng.settings["duplicate_window_min"] == 5, "impostazione doppi salvata")
+    d = gui.SettingsDialog(win, eng, "Trading")
+    check(d.sw_follow_be.isChecked() == eng.settings["follow_breakeven"] and d.sp_be_off.value() == eng.settings["be_offset_points"],
+          "pareggio del copiatore: valori attuali mostrati")
+    d.sw_follow_be.setChecked(False)
+    d.sp_be_after.setValue(200)
+    d.sp_be_off.setValue(15)
+    d.save()
+    check((eng.settings["follow_breakeven"], eng.settings["be_after_points"], eng.settings["be_offset_points"]) == (False, 200, 15),
+          "pareggio del copiatore salvato")
     s2 = eng.settings.get()
     check((s2["zone_wait"], s2["zone_wait_seconds"], s2["zone_margin_points"], s2["max_spread_points"],
            s2["slippage_points"]) == (True, 20, 15, 40, 25), "impostazioni ENTRATA salvate")

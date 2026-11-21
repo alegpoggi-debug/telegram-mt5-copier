@@ -1,3 +1,3 @@
-3.3
-Radar ancora più vicino alla realtà: ordine corretto di SL e TP dentro il minuto, spread storico, valore esatto del punto, swap notturni, commissione, tempi reali della copia, limiti di posizioni.
-Per la massima precisione aggiorna il ponte una volta: Impostazioni → MetaTrader → «Installa il ponte», poi «Compila» in MetaEditor (senza, il Radar funziona lo stesso).
+3.4
+Radar: menu «Impostazioni del Radar» (lotto, commissione, TP, pareggio, doppioni…) separato dalla copia; ogni canale con il suo guadagno accanto; messaggi con data, ora e miniatura del grafico con entrata, uscita ed esito (TP/SL/pareggio).
+Copiatore: nuove impostazioni del pareggio in Trading → Gestione (segui il pareggio del canale, pareggio automatico dopo X punti, margine).

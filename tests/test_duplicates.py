@@ -43,7 +43,7 @@ async def main():
     eng = Engine(ui)
     eng.loop = asyncio.get_running_loop()
     eng.lock = asyncio.Lock()
-    eng.settings.update({"mt5_dir": str(common), "dry_run": False, "max_open_trades": 99,
+    eng.settings.update({"mt5_dir": str(common), "dry_run": False, "max_open_trades": 99, "days": list(range(7)),
                          "max_trades_per_symbol": 99, "max_total_lots": 99})
     eng.setup_bridge()
     eng.channels = {-1: "Canale A", -2: "Canale B"}
