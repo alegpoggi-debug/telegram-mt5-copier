@@ -197,6 +197,26 @@ async def main():
     opens, el, _ = await signal("BUY LIMIT GOLD 2345-2350 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=1)
     check(len(opens) == 1 and opens[0]["otype"] == "LIMIT" and el < 1.5, "ordini limit: nessuna attesa")
 
+    # M) impostazioni del singolo canale: lotto e pareggio diversi solo per quel canale
+    ea.bid, ea.ask = 2347.80, 2348.00
+    over = {"channel_overrides": {"-1": {"lot_mode": "fixed", "fixed_lot": 0.07, "be_offset_points": 44,
+                                         "zone_wait": False}}}
+    opens, el, _ = await signal(BUY, lot_mode="fixed", fixed_lot=0.02, zone_wait=True, zone_wait_seconds=5,
+                                be_offset_points=5, **over)
+    check(len(opens) == 1 and float(opens[0]["volume"]) == 0.07, "lotto del canale usato al posto del generale",
+          opens and opens[0]["volume"])
+    await asyncio.sleep(0.1)
+    eng.state = eng.bridge.read_state()
+    pos = eng.my_positions()
+    check(pos and eng.pos_settings(pos[0])["be_offset_points"] == 44, "pareggio: margine del canale della posizione")
+    check(eng.settings_for(-2)["fixed_lot"] == 0.02 and eng.settings_for(-2)["be_offset_points"] == 5,
+          "altri canali: impostazioni generali")
+    ea.bid, ea.ask = 2353.00, 2353.20          # fuori fascia: il canale ha l'attesa spenta → entra subito
+    opens, el, _ = await signal(BUY, zone_wait=True, zone_wait_seconds=3, **over)
+    check(len(opens) == 1 and el < 1.5, "attesa della fascia spenta solo per questo canale", el)
+    opens, el, _ = await signal(BUY, lot_mode="fixed", fixed_lot=0.02, channel_overrides={})
+    check(len(opens) == 1 and float(opens[0]["volume"]) == 0.02, "senza personalizzazioni: lotto generale")
+
     print(f"TUTTI I {len(PASSED)} TEST DELLA FASCIA DI ENTRATA SUPERATI")
 
 

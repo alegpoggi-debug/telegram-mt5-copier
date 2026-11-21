@@ -708,20 +708,27 @@ def make_spark(bars, sig, max_points=90):
     return out
 
 
-# ============================================================================ impostazioni del Radar
-RADAR_KEYS = ["multi_tp_mode", "no_sl_mode", "default_sl_points", "ignore_duplicates", "duplicate_window_min",
-              "follow_breakeven", "be_on_tp1", "be_after_points", "be_offset_points", "tp_hit_action"]
+# ============================================================================ impostazioni usate dal Radar
+# Il Radar non ha impostazioni proprie (a parte lotto e commissione per la stima in denaro):
+# usa le impostazioni generali con le personalizzazioni del canale, come la copia vera.
+SIM_KEYS = ["multi_tp_mode", "tp_index", "lot_split", "no_sl_mode", "default_sl_points", "no_tp_mode",
+            "default_tp_points", "sl_adjust_points", "tp_adjust_points", "reverse", "direction_filter",
+            "order_type_mode", "pending_expiry_min", "ignore_duplicates", "duplicate_window_min",
+            "follow_breakeven", "follow_move_sl", "follow_close", "follow_partial", "follow_cancel",
+            "partial_percent", "be_on_tp1", "be_after_points", "be_offset_points", "tp_hit_action",
+            "tp_hit_partial_percent", "zone_wait", "zone_wait_seconds", "zone_margin_points", "updates_target",
+            "max_open_trades", "max_trades_per_symbol", "hours_enabled", "hours_start", "hours_end", "days",
+            "blocked_symbols", "allowed_symbols", "symbol_aliases"]
 
 
-def effective_settings(copier: dict) -> dict:
-    """Impostazioni usate dal Radar: quelle del copiatore, con le scelte fatte nel menu del Radar."""
-    s = dict(copier)
-    s.update({k: v for k, v in (prefs().get("settings") or {}).items() if k in RADAR_KEYS})
-    return s
+def effective_settings(general: dict, cid=None) -> dict:
+    """Impostazioni generali con le personalizzazioni del canale (come la copia vera)."""
+    from .settings import for_channel
+    return for_channel(general, cid) if cid is not None else dict(general)
 
 
 def settings_sig(s: dict) -> str:
-    return json.dumps({k: s.get(k) for k in RADAR_KEYS}, sort_keys=True)
+    return json.dumps({k: s.get(k) for k in SIM_KEYS}, sort_keys=True, default=str)
 
 
 def money_of(x, lot, usd_to_acc=None, commission=0.0):
@@ -824,7 +831,7 @@ def save_prefs(**kw):
 async def scan(engine, cid: int, name: str, days: int, progress=lambda text: None) -> Report:
     """Analizza un canale degli ultimi `days` giorni. Non apre nessuna operazione."""
     from .chart import fetch
-    s = effective_settings(engine.settings.get())
+    s = effective_settings(engine.settings.get(), cid)
     generated = dt.datetime.now().strftime("%d/%m/%Y %H:%M")
 
     def fail(msg):

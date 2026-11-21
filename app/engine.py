@@ -14,7 +14,7 @@ from pathlib import Path
 from .bridge import Bridge, BridgeError, find_common_files_dir
 from .config import DATA_DIR
 from .parser import describe, fingerprint, parse_message
-from .settings import SettingsStore, split_words
+from .settings import SettingsStore, for_channel, split_words
 
 log = logging.getLogger("engine")
 
@@ -336,7 +336,7 @@ class Engine:
         if not text:
             return
         async with self.lock:
-            s = self.settings.get()
+            s = self.settings_for(cid)
             channel = self.channels.get(cid, str(cid))
             if not edited:
                 if m.id in self.recent_ids.setdefault(cid, collections.deque(maxlen=50)):
@@ -766,13 +766,12 @@ class Engine:
         return out
 
     async def breakeven(self, tickets, offset_points=None) -> list[str]:
-        s = self.settings.get()
-        off = s["be_offset_points"] if offset_points is None else offset_points
         out = []
         for t in tickets:
             kind, p = self._find(int(t))
             if kind != "pos":
                 continue
+            off = self.pos_settings(p)["be_offset_points"] if offset_points is None else offset_points
             pt = self._point(p["symbol"])
             be = p["price_open"] + (off * pt if p["side"] == "buy" else -off * pt)
             if p["sl"] and ((p["side"] == "buy" and p["sl"] >= be) or (p["side"] == "sell" and p["sl"] <= be)):
@@ -800,13 +799,38 @@ class Engine:
             out.append(await self._send({"action": "CANCEL", "ticket": t}, f"cancella ordine #{t}"))
         return out or ["nessun ordine"]
 
-    async def _auto_manage(self):
+    def settings_for(self, cid) -> dict:
+        """Impostazioni generali con le personalizzazioni del canale."""
+        return for_channel(self.settings.get(), cid)
+
+    def pos_settings(self, p) -> dict:
+        """Impostazioni del canale da cui è nata una posizione (generali se non si sa)."""
+        k = self.db.key_for(p["ticket"], p.get("comment", ""))
+        sig = self.db.get(k) if k else None
+        return self.settings_for(sig["chat_id"]) if sig else self.settings.get()
+
+    async def tg_signal_chats(self, limit=60, progress=lambda text: None) -> list[int]:
+        """Canali e gruppi che negli ultimi messaggi hanno inviato almeno un segnale."""
         s = self.settings.get()
+        chats = await self.tg_list_chats()
+        found = []
+        for n, c in enumerate(chats, 1):
+            progress(f"Controllo {n}/{len(chats)}: {c['name']}")
+            try:
+                async for m in self.tg.iter_messages(c["id"], limit=limit):
+                    if m.message and parse_message(m.message, s, None)["kind"] == "signal":
+                        found.append(c["id"])
+                        break
+            except Exception:
+                continue
+        return found
+
+    async def _auto_manage(self):
         positions = {p["ticket"]: p for p in self.my_positions()}
         # 1) TP preso su una posizione → pareggio sulle altre dello stesso segnale
-        if s["be_on_tp1"] and self._prev_positions:
+        if self._prev_positions:
             for t, old in self._prev_positions.items():
-                if t in positions or not old["tp"]:
+                if t in positions or not old["tp"] or not self.pos_settings(old)["be_on_tp1"]:
                     continue
                 pc, tp, sl = old["price_current"], old["tp"], old["sl"]
                 hit_tp = abs(pc - tp) < abs(pc - sl) if sl else True
@@ -825,6 +849,7 @@ class Engine:
         for t, p in positions.items():
             if time.time() - self._last_modify.get(t, 0) < 5:
                 continue
+            s = self.pos_settings(p)
             pt = self._point(p["symbol"])
             if not pt:
                 continue

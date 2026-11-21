@@ -208,10 +208,14 @@ def main():
     d.save()
     check(eng.settings.get() == before, "salvare senza toccare non cambia niente")
 
-    # ---------------------------------------------------- finestra Radar e analisi
+    # ---------------------------------------------------- pagina Radar e analisi
+    d.show()
     d.open_radar()
-    rw = radar_ui.RadarWindow._instance
-    check(rw is not None and rw.isVisible() and rw.nav.count() == 1, "Apri Radar mostra il canale")
+    rw = d.radar
+    check(d.stack.currentWidget() is rw and rw.isVisible() and rw.nav.count() == 1,
+          "Apri Radar mostra il canale nella pagina Radar")
+    check(not hasattr(radar_ui, "RadarSettingsDialog") and not hasattr(radar_ui, "RadarWindow"),
+          "nessun menu né finestra a parte per il Radar")
     check("Aggiorna" in rw.lbl_progress.text(), "invito ad analizzare")
     rw.cb_days.setCurrentIndex(rw.cb_days.findData(7))
     t0 = time.time()
@@ -251,11 +255,8 @@ def main():
           "BUY: entrata con lo spread storico (30 punti)")
     # commissione: abbassa il risultato di 7 € × lotto × posizioni
     def set_estimate(lot, comm):
-        dlg = radar_ui.RadarSettingsDialog(rw, eng)
-        dlg.sp_lot.setValue(lot)
-        dlg.sp_comm.setValue(comm)
-        dlg.save()
-        rw.reload_channels()
+        rw.sp_lot.setValue(lot)
+        rw.sp_comm.setValue(comm)
     set_estimate(0.10, 0.0)
     base, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc, 0.0)
     set_estimate(0.10, 7.0)
@@ -270,7 +271,8 @@ def main():
     m10, _ = radar.summarize(rep.signals, rep.messages, 0, 0.10, rep.usd_to_acc)
     check(abs(m10["money"] - 10 * m1["money"]) < 0.11 and txt1 != rw.pills[2].text(), "lotto 0,10 = 10 volte 0,01",
           (m1["money"], m10["money"]))
-    check(radar.prefs().get("lot") == 0.1 and "0.1 lotti" in rw.lbl_lot.text(), "lotto scelto ricordato e mostrato")
+    check(radar.prefs().get("lot") == 0.1 and radar_ui.RadarPanel(eng).sp_lot.value() == 0.1,
+          "lotto scelto ricordato e mostrato")
     cell = rw.t_sig.item(0, 7).text()
     check(("€" in cell) or cell == "", "risultato di ogni segnale in euro", cell)
     check("€" in rw.channel_gain_text(0), "guadagno del canale accanto al nome", rw.channel_gain_text(0))
@@ -293,32 +295,37 @@ def main():
     rw.nav.setCurrentRow(0)
     check(rw.report.channel_id == CH and len(rw.feed_cards()) == len(MESSAGES), "clic su un canale: i suoi messaggi")
 
-    # impostazioni del Radar: valgono solo per il Radar, la copia non cambia
-    copier_before = eng.settings.get()
-    dlg = radar_ui.RadarSettingsDialog(rw, eng)
-    check(dlg.cb_tp.currentData() == copier_before["multi_tp_mode"] and dlg.sw_follow_be.isChecked() ==
-          copier_before["follow_breakeven"], "il menu del Radar parte dalle impostazioni del copiatore")
-    dlg.cb_tp.setCurrentIndex(dlg.cb_tp.findData("first"))
-    dlg.sp_be_after.setValue(150)
-    dlg.sw_be_tp1.setChecked(False)
-    dlg.save()
-    check(eng.settings.get() == copier_before, "le impostazioni del Radar non toccano la copia vera")
-    eff = radar.effective_settings(eng.settings.get())
+    # il Radar segue le impostazioni generali e quelle del singolo canale
+    general = eng.settings.get()
+    eff0 = radar.effective_settings(general, CH)
+    check(all(eff0[k] == general[k] for k in radar.SIM_KEYS), "senza personalizzazioni: impostazioni generali")
+    eng.settings.update({"channel_overrides": {str(CH): {"multi_tp_mode": "first", "be_after_points": 150,
+                                                         "be_on_tp1": False}}})
+    eff = radar.effective_settings(eng.settings.get(), CH)
     check(eff["multi_tp_mode"] == "first" and eff["be_after_points"] == 150 and not eff["be_on_tp1"],
-          "il Radar usa le sue impostazioni")
+          "il Radar usa le impostazioni del canale")
+    eff2 = radar.effective_settings(eng.settings.get(), CH2)
+    check(eff2["multi_tp_mode"] == general["multi_tp_mode"] and eff2["be_after_points"] == general["be_after_points"],
+          "l'altro canale resta con le generali")
     rw.show_saved()
-    check("impostazioni del Radar cambiate" in rw.lbl_progress.text(), "avviso: analisi da aggiornare")
+    check("impostazioni cambiate" in rw.lbl_progress.text(), "avviso: analisi da aggiornare", rw.lbl_progress.text())
+    rw.nav.setCurrentRow(1)
+    check("cambiate" not in rw.lbl_progress.text(), "nessun avviso sull'altro canale", rw.lbl_progress.text())
+    rw.nav.setCurrentRow(0)
     rw.btn_run.click()
     wait_until(lambda: not rw.running, 60)
     check(rw.report.settings_sig == radar.settings_sig(eff) and "cambiate" not in rw.lbl_progress.text(),
-          "analisi rifatta con le impostazioni del Radar")
-    dlg = radar_ui.RadarSettingsDialog(rw, eng)
-    dlg.like_copier()
-    check(dlg.cb_tp.currentData() == copier_before["multi_tp_mode"] and dlg.sp_be_after.value() ==
-          copier_before["be_after_points"], "«Come il copiatore» riporta le impostazioni della copia")
-    dlg.save()
+          "analisi rifatta con le impostazioni del canale")
+    first_tp_only = rw.report.stats["executed"]
+    check(first_tp_only >= 8, "simulazione con «solo il primo TP»", first_tp_only)
+    # un'impostazione generale cambiata vale anche per il Radar
+    eng.settings.update({"zone_wait": not general["zone_wait"]})
+    rw.show_saved()
+    check("impostazioni cambiate" in rw.lbl_progress.text(), "anche le generali valgono per il Radar")
+    eng.settings.update({"zone_wait": general["zone_wait"], "channel_overrides": {}})
     rw.btn_run.click()
     wait_until(lambda: not rw.running, 60)
+    check(rw.report.settings_sig == radar.settings_sig(eff0), "tornato alle impostazioni generali")
 
     # seconda analisi: i prezzi sono già salvati sul disco
     calls = ea.rates_calls
@@ -341,25 +348,32 @@ def main():
     ea.precise = True
 
     # report ricaricato alla riapertura (anche senza rianalizzare)
-    rw.close()
-    radar_ui.RadarWindow._instance = None
-    rw = radar_ui.RadarWindow.show_for(win, eng)
+    d.reject()
+    d = gui.SettingsDialog(win, eng, "Radar")
+    d.show()
+    rw = d.radar
     check(rw.report is not None and rw.t_sig.rowCount() == 10 and rw.nav.count() == 2,
           "risultati salvati e mostrati alla riapertura")
 
     # grafico di un segnale
-    rw.resize(1240, 840)
+    d.resize(1240, 840)
     QTest.qWait(100)
-    rw.grab().save(str(TMP / "radar.png"))
+    d.grab().save(str(TMP / "radar.png"))
     rw._tab(1)
     QTest.qWait(50)
-    rw.grab().save(str(TMP / "radar_tabella.png"))
+    d.grab().save(str(TMP / "radar_tabella.png"))
     rw._tab(0)
-    sd = radar_ui.RadarSettingsDialog(rw, eng)
+    sd = gui.ChannelSettingsDialog(d, eng, CH, "Canale Radar")
+    sd.items[0][1].setChecked(True)
     sd.show()
+    sd.resize(640, 760)
     QTest.qWait(50)
-    sd.grab().save(str(TMP / "radar_impostazioni.png"))
+    sd.grab().save(str(TMP / "canale_impostazioni.png"))
     sd.reject()
+    d.nav.setCurrentRow(0)
+    QTest.qWait(50)
+    d.grab().save(str(TMP / "telegram.png"))
+    d.nav.setCurrentRow(d.PAGES.index("Radar"))
     mini = next(m for m in (c.findChild(radar_ui.MiniChart) for c in rw.feed_cards()) if m is not None)
     QTest.mouseClick(mini, Qt.LeftButton)
     dlg = next(c for c in rw.children() if isinstance(c, radar_ui.RadarTradeChart))

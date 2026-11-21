@@ -1,12 +1,13 @@
 """Interfaccia grafica (PySide6): finestra principale + impostazioni essenziali."""
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import html
 import threading
 import time
 
-from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTime, QUrl, Signal
+from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QApplication, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 from . import updater
 from .bridge import find_common_files_dir
 from .mt5_install import install_ea
+from .settings import CHANNEL_KEYS
 
 # ----------------------------------------------------------------------------- palette
 BG, SURFACE, SURFACE2, BORDER = "#0e1116", "#151a21", "#1b222b", "#242c36"
@@ -424,7 +426,7 @@ class MainWindow(QMainWindow):
 class ChannelRow(QFrame):
     """Riga di un canale: si clicca ovunque per sceglierlo."""
 
-    def __init__(self, cid, name, checked, on_change, radar=False, on_radar=None):
+    def __init__(self, cid, name, checked, on_change, radar=False, on_radar=None, on_gear=None, custom=False):
         super().__init__()
         self.cid, self.name = cid, name
         self.setCursor(Qt.PointingHandCursor)
@@ -437,12 +439,27 @@ class ChannelRow(QFrame):
         self.switch.setToolTip("Copia: il programma esegue i segnali di questo canale")
         self.radar = Switch(radar, color=BLUE)
         self.radar.setToolTip("Radar: osserva il canale senza copiarlo")
+        self.gear = QPushButton("⚙")
+        self.gear.setCursor(Qt.PointingHandCursor)
+        self.gear.setFixedWidth(30)
+        if on_gear:
+            self.gear.clicked.connect(lambda: on_gear(self))
         lay.addWidget(self.lbl, 1)
+        lay.addWidget(self.gear)
         lay.addWidget(self.radar)
         lay.addWidget(self.switch)
+        self.set_custom(custom)
         self.switch.toggled.connect(lambda _c: (self._paint(), on_change()))
         self.radar.toggled.connect(lambda _c: on_radar and on_radar())
         self._paint()
+
+    def set_custom(self, custom):
+        """⚙ blu = questo canale ha impostazioni personalizzate."""
+        self.custom = bool(custom)
+        self.gear.setToolTip("Impostazioni personalizzate di questo canale" if custom else
+                             "Impostazioni di questo canale (ora usa quelle generali)")
+        self.gear.setStyleSheet(f"QPushButton {{ background: transparent; border: none; padding: 2px; font-size: 15px;"
+                                f" color: {BLUE if custom else FAINT}; }} QPushButton:hover {{ color: {TEXT}; }}")
 
     def _paint(self):
         on = self.switch.isChecked()
@@ -464,8 +481,209 @@ def _clean_spin(sp, width=130):
     return sp
 
 
+class _Text(QObject):
+    text = Signal(str)
+
+    def say(self, t):
+        try:
+            self.text.emit(t)
+        except RuntimeError:          # finestra chiusa nel frattempo
+            pass
+
+
+class ChannelSettingsDialog(QDialog):
+    """Impostazioni di un solo canale: ogni voce usa quella generale finché non la personalizzi."""
+
+    LOT_KEYS = {"fixed": "fixed_lot", "risk_percent": "risk_percent", "risk_money": "risk_money"}
+
+    def __init__(self, parent, engine, cid, name, general=None):
+        super().__init__(parent)
+        self.engine, self.cid = engine, cid
+        self.setWindowTitle(f"Impostazioni · {name}")
+        self.setStyleSheet(STYLE)
+        self.general = dict(general or engine.settings.get())
+        self.general.pop("channel_overrides", None)
+        saved = engine.settings.get()
+        self.over = dict((saved.get("channel_overrides") or {}).get(str(cid)) or {})
+        eff = dict(self.general)
+        eff.update({k: v for k, v in self.over.items() if k in CHANNEL_KEYS})
+        self.items = []          # (chiavi, switch, contenitore, leggi, scrivi)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(12)
+        lay.addWidget(_label(name, "h1"))
+        lay.addWidget(_label("Accendi «Personalizza» solo sulle voci che vuoi diverse per questo canale: le altre "
+                             "seguono le impostazioni generali (pagina Trading). Valgono per la copia e per il Radar.",
+                             "muted", wrap=True))
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 6, 0)
+        bl.setSpacing(12)
+
+        # dimensione
+        c, cl = _card(spacing=12)
+        cl.addWidget(_label("DIMENSIONE", "section"))
+        cb_mode = QComboBox()
+        for v, t in (("fixed", "Lotto fisso"), ("risk_percent", "% del saldo"), ("risk_money", "Importo fisso")):
+            cb_mode.addItem(t, v)
+        sp_val = QDoubleSpinBox()
+        _clean_spin(sp_val, 110)
+        lot_box = QHBoxLayout()
+        lot_box.addWidget(cb_mode)
+        lot_box.addWidget(sp_val)
+        vals = {m: eff[k] for m, k in self.LOT_KEYS.items()}
+
+        def lot_mode(m, src=None):
+            _t, _d, lo, hi, dec, step, suf = SettingsDialog.LOT_SPEC[m]
+            sp_val.setDecimals(dec)
+            sp_val.setRange(lo, hi)
+            sp_val.setSingleStep(step)
+            sp_val.setSuffix(suf)
+            sp_val.setValue(float((src or vals)[m]))
+
+        def lot_get():
+            m = cb_mode.currentData()
+            return {"lot_mode": m, self.LOT_KEYS[m]: round(sp_val.value(), 4)}
+
+        def lot_set(src):
+            for m, k in self.LOT_KEYS.items():
+                vals[m] = src[k]
+            m = src["lot_mode"] if src["lot_mode"] in self.LOT_KEYS else "fixed"
+            cb_mode.blockSignals(True)
+            cb_mode.setCurrentIndex(cb_mode.findData(m))
+            cb_mode.blockSignals(False)
+            lot_mode(m)
+
+        cb_mode.currentIndexChanged.connect(lambda _i: lot_mode(cb_mode.currentData()))
+        self._item(cl, "Lotto", None,
+                   ["lot_mode", "fixed_lot", "risk_percent", "risk_money"], lot_box, lot_get, lot_set, eff)
+        bl.addWidget(c)
+
+        # segnali
+        c, cl = _card(spacing=12)
+        cl.addWidget(_label("SEGNALI", "section"))
+        self._combo(cl, "Segnali con più TP", None, "multi_tp_mode",
+                    [("split", "Una posizione per ogni TP"), ("first", "Solo il primo TP"), ("last", "Solo l'ultimo TP")]
+                    + ([("index", f"Solo il TP n° {eff['tp_index']}")] if "index" in
+                       (eff["multi_tp_mode"], self.general["multi_tp_mode"]) else []), eff)
+        self._combo(cl, "Segnali senza Stop Loss", None, "no_sl_mode",
+                    [("ignore", "Ignora il segnale"), ("default", "Usa uno SL predefinito"), ("none", "Apri senza SL")], eff)
+        self._spin(cl, "SL predefinito", "Se usi «SL predefinito».", "default_sl_points",
+                   1, 1000000, " punti", eff)
+        bl.addWidget(c)
+
+        # entrata
+        c, cl = _card(spacing=12)
+        cl.addWidget(_label("ENTRATA", "section"))
+        self._switch(cl, "Aspetta il prezzo nella fascia", None, "zone_wait", eff)
+        self._spin(cl, "Tempo massimo di attesa", None, "zone_wait_seconds", 0, 3600, " secondi", eff)
+        bl.addWidget(c)
+
+        # gestione
+        c, cl = _card(spacing=12)
+        cl.addWidget(_label("GESTIONE", "section"))
+        self._switch(cl, "Pareggio dopo il primo TP", None, "be_on_tp1", eff)
+        self._switch(cl, "Segui il pareggio del canale", None, "follow_breakeven", eff)
+        self._spin(cl, "Pareggio automatico dopo", "0 = no.", "be_after_points", 0, 1000000, " punti", eff)
+        self._spin(cl, "Margine del pareggio", None, "be_offset_points", -10000, 10000, " punti", eff)
+        self._combo(cl, "Messaggio «TP raggiunto»", None, "tp_hit_action",
+                    [("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"), ("partial", "Chiudi metà"),
+                     ("partial_be", "Chiudi metà e SL a pareggio")], eff)
+        bl.addWidget(c)
+        bl.addStretch(1)
+
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setWidget(body)
+        lay.addWidget(sc, 1)
+        bottom = QHBoxLayout()
+        bottom.addWidget(_btn("Usa tutte le generali", self.reset, "ghost"))
+        bottom.addStretch(1)
+        bottom.addWidget(_btn("Annulla", self.reject))
+        bottom.addWidget(_btn("Salva", self.save, "primary"))
+        lay.addLayout(bottom)
+        self.setMinimumSize(560, 480)
+        _fit_to_screen(self, 640, 760)
+
+    # ---------------------------------------------------------------- voci
+    def _item(self, lay, title, desc, keys, control, get, put, eff):
+        r = QHBoxLayout()
+        r.setSpacing(12)
+        txt = QVBoxLayout()
+        txt.setSpacing(2)
+        txt.addWidget(_label(title))
+        if desc:
+            txt.addWidget(_label(desc, "muted", wrap=True))
+        r.addLayout(txt, 1)
+        box = QWidget()
+        bl = QHBoxLayout(box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        if isinstance(control, QHBoxLayout):
+            bl.addLayout(control)
+        else:
+            bl.addWidget(control)
+        r.addWidget(box, 0, Qt.AlignRight | Qt.AlignVCenter)
+        sw = Switch(any(k in self.over for k in keys), color=BLUE)
+        sw.setToolTip("Personalizza per questo canale")
+        cap = _label("Personalizza", "muted")
+        cap.setFixedWidth(78)
+        r.addWidget(cap)
+        r.addWidget(sw)
+        lay.addLayout(r)
+        put(eff)
+
+        def toggled(on):
+            box.setEnabled(on)
+            if not on:
+                put(self.general)        # torna a mostrare il valore generale
+        sw.toggled.connect(toggled)
+        box.setEnabled(sw.isChecked())
+        self.items.append((keys, sw, box, get, put))
+
+    def _combo(self, lay, title, desc, key, options, eff):
+        cb = QComboBox()
+        for v, t in options:
+            cb.addItem(t, v)
+        self._item(lay, title, desc, [key], cb, lambda: {key: cb.currentData()},
+                   lambda src: cb.setCurrentIndex(max(0, cb.findData(src[key]))), eff)
+
+    def _spin(self, lay, title, desc, key, lo, hi, suffix, eff):
+        sp = QSpinBox()
+        sp.setRange(lo, hi)
+        sp.setSuffix(suffix)
+        _clean_spin(sp, 130)
+        self._item(lay, title, desc, [key], sp, lambda: {key: sp.value()}, lambda src: sp.setValue(int(src[key])), eff)
+
+    def _switch(self, lay, title, desc, key, eff):
+        w = Switch(False)
+        self._item(lay, title, desc, [key], w, lambda: {key: w.isChecked()}, lambda src: w.setChecked(bool(src[key])), eff)
+
+    # ---------------------------------------------------------------- salva
+    def reset(self):
+        for _keys, sw, *_ in self.items:
+            sw.setChecked(False)
+
+    def values(self) -> dict:
+        out = {}
+        for _keys, sw, _box, get, _put in self.items:
+            if sw.isChecked():
+                out.update(get())
+        return out
+
+    def save(self):
+        all_over = dict(self.engine.settings.get().get("channel_overrides") or {})
+        mine = self.values()
+        if mine:
+            all_over[str(self.cid)] = mine
+        else:
+            all_over.pop(str(self.cid), None)
+        self.engine.settings.update({"channel_overrides": all_over})
+        self.accept()
+
+
 class SettingsDialog(QDialog):
-    PAGES = ["Telegram", "MetaTrader", "Trading", "Prova un messaggio"]
+    PAGES = ["Telegram", "MetaTrader", "Trading", "Prova un messaggio", "Radar"]
 
     def __init__(self, parent, engine, start_page=None):
         super().__init__(parent)
@@ -486,8 +704,10 @@ class SettingsDialog(QDialog):
                            ("Trading", self._page_trading()), ("Prova un messaggio", self._page_test())):
             QListWidgetItem(name, self.nav)
             self.stack.addWidget(self._scroll(page))
-        QListWidgetItem("Radar  ↗", self.nav)     # apre la finestra del Radar
-        self._last_page = 0
+        from .radar_ui import RadarPanel
+        self.radar = RadarPanel(engine)
+        QListWidgetItem("Radar", self.nav)
+        self.stack.addWidget(self.radar)
         self.nav.currentRowChanged.connect(self._go)
         idx = self.PAGES.index(start_page) if start_page in self.PAGES else 0
         self.nav.setCurrentRow(idx)
@@ -520,14 +740,10 @@ class SettingsDialog(QDialog):
         return sc
 
     def _go(self, i):
-        if i >= len(self.PAGES):                  # voce «Radar»: apre la finestra e resta sulla pagina di prima
-            self.nav.blockSignals(True)
-            self.nav.setCurrentRow(self._last_page)
-            self.nav.blockSignals(False)
-            self.open_radar()
-            return
-        self._last_page = i
         self.stack.setCurrentIndex(i)
+        if self.PAGES[i] == "Radar":
+            self.radar.reload_channels()
+            _fit_to_screen(self, max(self.width(), 1240), max(self.height(), 820))
         if self.PAGES[i] == "Telegram" and self.engine.tg_authorized and not self._loaded_chats:
             self._loaded_chats = True
             self.load_channels(quiet=True)
@@ -601,11 +817,20 @@ class SettingsDialog(QDialog):
         head.addWidget(_btn("Aggiorna elenco", lambda: self.load_channels(quiet=False), "ghost"))
         ch.addLayout(head)
         ch.addWidget(_label("Copia: il programma esegue i segnali (clic sul nome). Radar: osserva soltanto, per vedere "
-                            "come sarebbe andato il canale. Le scelte si salvano subito.", "muted", wrap=True))
+                            "come sarebbe andato il canale. ⚙: impostazioni solo per quel canale (se non le cambi "
+                            "valgono quelle generali della pagina Trading). Le scelte si salvano subito.",
+                            "muted", wrap=True))
+        frow = QHBoxLayout()
         self.ed_filter = QLineEdit()
         self.ed_filter.setPlaceholderText("Cerca…")
         self.ed_filter.textChanged.connect(self.filter_channels)
-        ch.addWidget(self.ed_filter)
+        frow.addWidget(self.ed_filter, 1)
+        self.btn_signals = _btn("", self.toggle_signal_chats)
+        frow.addWidget(self.btn_signals)
+        ch.addLayout(frow)
+        self.lbl_signals = _label("", "muted", wrap=True)
+        ch.addWidget(self.lbl_signals)
+        self._scanning = False
         cols = QHBoxLayout()
         cols.setContentsMargins(12, 4, 12, 0)
         cols.setSpacing(14)
@@ -639,6 +864,7 @@ class SettingsDialog(QDialog):
         except Exception:
             me = None
         self._set_account(me)
+        self._update_signal_button()
         return w
 
     def _set_account(self, me):
@@ -654,10 +880,12 @@ class SettingsDialog(QDialog):
     def _add_channel_row(self, cid, name, checked, radar=False):
         if any(r.cid == cid for r in self.rows):
             return
-        row = ChannelRow(cid, name, checked, self._channels_changed, radar, self._radar_changed)
+        row = ChannelRow(cid, name, checked, self._channels_changed, radar, self._radar_changed,
+                         self.open_channel_settings, bool(self.s["channel_overrides"].get(str(cid))))
         self.rows.append(row)
         self.rows_box.addWidget(row)
         self.lbl_no_rows.hide()
+        self._apply_filter(row)
 
     def _checked_channels(self):
         return [{"id": r.cid, "name": r.name} for r in self.rows if r.isChecked()]
@@ -675,8 +903,13 @@ class SettingsDialog(QDialog):
         self.s["radar_channels"] = lst
 
     def open_radar(self):
-        from .radar_ui import RadarWindow
-        RadarWindow.show_for(self.parent() or self, self.engine)
+        self.nav.setCurrentRow(self.PAGES.index("Radar"))
+
+    def open_channel_settings(self, row):
+        dlg = ChannelSettingsDialog(self, self.engine, row.cid, row.name, self.current_values())
+        if dlg.exec() == QDialog.Accepted:
+            self.s["channel_overrides"] = self.engine.settings.get()["channel_overrides"]
+            row.set_custom(bool(self.s["channel_overrides"].get(str(row.cid))))
 
     def _channels_changed(self):
         """Salva subito i canali scelti e li mette in ascolto."""
@@ -688,9 +921,75 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
-    def filter_channels(self, text):
+    def filter_channels(self, _text=None):
         for r in self.rows:
-            r.setVisible(text.lower() in r.name.lower())
+            self._apply_filter(r)
+
+    def _apply_filter(self, r):
+        text = self.ed_filter.text().lower()
+        ok = text in r.name.lower()
+        if ok and self.s["only_signal_chats"] and self.s["signal_chats"] is not None:
+            # i canali già in Copia o nel Radar restano sempre visibili
+            ok = r.cid in self.s["signal_chats"] or r.isChecked() or r.radar.isChecked()
+        r.setVisible(ok)
+
+    def _update_signal_button(self):
+        if self._scanning:
+            return
+        on = self.s["only_signal_chats"] and self.s["signal_chats"] is not None
+        self.btn_signals.setText("Mostra tutti" if on else "Solo canali con segnali")
+        self.btn_signals.setToolTip("Torna a vedere tutti i canali" if on else
+                                    "Controlla gli ultimi messaggi di ogni canale e nasconde quelli che non inviano segnali")
+        if on:
+            hidden = sum(1 for r in self.rows if not r.isVisible())
+            self.lbl_signals.setText(f"Mostro solo i canali che inviano segnali ({hidden} nascosti). "
+                                     "Premi «Aggiorna elenco» e poi di nuovo il pulsante per ricontrollare.")
+        self.lbl_signals.setVisible(on)
+
+    def toggle_signal_chats(self):
+        if self._scanning:
+            return
+        if self.s["only_signal_chats"] and self.s["signal_chats"] is not None:
+            self._set_signal_filter(False, self.s["signal_chats"])
+            return
+        if not self.engine.tg_authorized:
+            QMessageBox.information(self, "Telegram", "Prima accedi a Telegram.")
+            return
+        self._scanning = True
+        self.btn_signals.setEnabled(False)
+        self.btn_signals.setText("Controllo…")
+        self.lbl_signals.setText("Leggo gli ultimi messaggi di ogni canale…")
+        self.lbl_signals.show()
+        prog = _Text()
+        prog.text.connect(self.lbl_signals.setText)
+        fut = asyncio.run_coroutine_threadsafe(self.engine.tg_signal_chats(progress=prog.say), self.engine.loop)
+        poll = QTimer(self)
+
+        def check():
+            if not fut.done():
+                return
+            poll.stop()
+            poll.deleteLater()
+            self._scanning = False
+            self.btn_signals.setEnabled(True)
+            try:
+                found = fut.result()
+            except Exception as e:
+                self._update_signal_button()
+                self.lbl_signals.setText(f"Controllo non riuscito: {e}")
+                self.lbl_signals.show()
+                return
+            self._set_signal_filter(True, found)
+        poll.timeout.connect(check)
+        poll.start(100)
+        self._signal_poll = (poll, prog)
+
+    def _set_signal_filter(self, on, found):
+        vals = {"only_signal_chats": on, "signal_chats": list(found)}
+        self.engine.settings.update(vals)
+        self.s.update(vals)
+        self.filter_channels()
+        self._update_signal_button()
 
     def _save_api(self) -> bool:
         api_id, api_hash = self.ed_api_id.text().strip(), self.ed_api_hash.text().strip()
@@ -752,6 +1051,7 @@ class SettingsDialog(QDialog):
             return
         for c in chats:
             self._add_channel_row(c["id"], c["name"], False)
+        self._update_signal_button()
 
     # ------------------------------------------------------------ MetaTrader
     def _page_mt5(self):

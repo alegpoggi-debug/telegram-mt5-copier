@@ -62,6 +62,9 @@ DEFAULTS = {
     "duplicate_window_min": 10,
     "radar_channels": [],  # canali solo osservati dal Radar: lista di {"id": int, "name": str}
     "radar_days": 30,
+    "channel_overrides": {},  # impostazioni personalizzate per canale: {"id canale": {chiave: valore}}
+    "signal_chats": None,     # canali/gruppi che hanno inviato segnali (None = non ancora controllato)
+    "only_signal_chats": False,
     "zone_wait": False,
     "zone_wait_seconds": 15,
     "zone_margin_points": 0,
@@ -183,6 +186,20 @@ SCHEMA = {
         ("kw_ignore", "Ignora i messaggi che contengono", "str", None, "Es. RISULTATI, PROMO, VIP"),
     ],
 }
+
+
+# impostazioni che si possono personalizzare per ogni canale
+CHANNEL_KEYS = ["lot_mode", "fixed_lot", "risk_percent", "risk_money", "multi_tp_mode", "no_sl_mode",
+                "default_sl_points", "follow_breakeven", "be_on_tp1", "be_after_points", "be_offset_points",
+                "tp_hit_action", "zone_wait", "zone_wait_seconds"]
+
+
+def for_channel(general: dict, cid) -> dict:
+    """Impostazioni valide per un canale: quelle generali con le personalizzazioni del canale."""
+    s = dict(general)
+    over = (general.get("channel_overrides") or {}).get(str(cid)) or {}
+    s.update({k: v for k, v in over.items() if k in CHANNEL_KEYS})
+    return s
 
 
 class SettingsStore:

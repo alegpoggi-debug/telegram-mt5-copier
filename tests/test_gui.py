@@ -16,6 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import telethon  # noqa: E402
 
 CHATS = [(-1001234567890123, "Segnali VIP & Gold"), (-1009876543210, "Forex Pro"), (-4123456789, "Gruppo Amici")]
+# ultimi messaggi di ogni chat: «Forex Pro» non manda segnali
+CHAT_TEXTS = {CHATS[0][0]: ["Buongiorno a tutti", "XAUUSD BUY 2350 SL 2340 TP 2360"],
+              CHATS[1][0]: ["Ciao", "Oggi mercato lento", "Analisi della settimana"],
+              CHATS[2][0]: ["SELL EURUSD 1.0850 SL 1.0880 TP 1.0800"]}
 
 
 class FakeClient:
@@ -46,6 +50,10 @@ class FakeClient:
     async def iter_dialogs(self):
         for cid, name in CHATS:
             yield types.SimpleNamespace(id=cid, name=name, is_channel=True, is_group=False, entity=None)
+
+    async def iter_messages(self, cid, limit=None, **k):
+        for i, t in enumerate(CHAT_TEXTS.get(cid, [])[:limit]):
+            yield types.SimpleNamespace(id=i + 1, message=t)
 
     async def disconnect(self):
         self.connected = False
@@ -218,18 +226,149 @@ def main():
     d.rows[2].switch.setChecked(True)
     d.save()
 
-    # voce «Radar» nel menu delle impostazioni: apre la finestra del Radar
+    # voce «Radar» nel menu delle impostazioni: si apre a destra, come le altre pagine
     from app import radar_ui
     d = gui.SettingsDialog(win, eng, "Trading")
     d.show()
+    n_top = len([w for w in QApplication.topLevelWidgets() if w.isVisible()])
     d.nav.setCurrentRow(d.nav.count() - 1)
     QTest.qWait(100)
-    rw = radar_ui.RadarWindow._instance
-    check(d.nav.item(d.nav.count() - 1).text().startswith("Radar") and rw is not None and rw.isVisible(),
-          "voce Radar nel menu apre il Radar")
-    check(d.nav.currentRow() == 2 and d.stack.currentIndex() == 2, "il menu resta sulla pagina di prima")
-    rw.close()
+    check(d.nav.item(d.nav.count() - 1).text() == "Radar" and d.stack.currentWidget() is d.radar
+          and isinstance(d.radar, radar_ui.RadarPanel) and d.radar.isVisible(), "voce Radar: pagina a destra")
+    check(len([w for w in QApplication.topLevelWidgets() if w.isVisible()]) == n_top, "nessuna finestra in più")
+    scr_w = QApplication.primaryScreen().availableGeometry().width()
+    check(d.width() >= min(1240, int(scr_w * 0.95)), "la finestra si allarga per il Radar (senza uscire dallo schermo)",
+          (d.width(), scr_w))
+    d.nav.setCurrentRow(2)
+    check(d.stack.currentIndex() == 2, "si torna alle altre pagine")
     d.reject()
+    d = gui.SettingsDialog(win, eng, "Radar")
+    check(d.stack.currentWidget() is d.radar, "si può aprire direttamente sul Radar")
+    d.reject()
+    d = gui.SettingsDialog(win, eng, "Telegram")
+    d.show()
+    d.open_radar()
+    check(d.stack.currentWidget() is d.radar and d.nav.currentRow() == d.PAGES.index("Radar"),
+          "«Apri Radar» porta alla pagina Radar")
+    d.reject()
+
+    # ---------------------------------------------------- 3b) impostazioni del singolo canale
+    general_before = eng.settings.get()
+    d = gui.SettingsDialog(win, eng, "Telegram")
+    d.show()
+    QTest.qWait(200)
+    row = next(r for r in d.rows if r.cid == CHATS[0][0])
+    check(not row.custom, "di base il canale usa le impostazioni generali")
+    cd = gui.ChannelSettingsDialog(d, eng, row.cid, row.name, d.current_values())
+    check(all(not sw.isChecked() and not box.isEnabled() for _k, sw, box, *_ in cd.items),
+          "tutte le voci sono «generali» e bloccate")
+    check(cd.values() == {}, "nessuna personalizzazione all'inizio")
+    lot_item = next(it for it in cd.items if "lot_mode" in it[0])
+    be_item = next(it for it in cd.items if it[0] == ["be_offset_points"])
+    tp1_item = next(it for it in cd.items if it[0] == ["be_on_tp1"])
+    check(lot_item[2].findChildren(gui.QDoubleSpinBox)[0].value() == general_before["fixed_lot"],
+          "mostra il valore generale", lot_item[2].findChildren(gui.QDoubleSpinBox)[0].value())
+    lot_item[1].setChecked(True)
+    check(lot_item[2].isEnabled(), "personalizza: la voce si sblocca")
+    lot_item[2].findChildren(gui.QDoubleSpinBox)[0].setValue(0.25)
+    be_item[1].setChecked(True)
+    be_item[2].findChildren(gui.QSpinBox)[0].setValue(33)
+    tp1_item[1].setChecked(True)
+    tp1_item[2].findChildren(gui.Switch)[0].setChecked(False)
+    cd.save()
+    over = eng.settings["channel_overrides"]
+    check(over == {str(row.cid): {"lot_mode": "fixed", "fixed_lot": 0.25, "be_offset_points": 33, "be_on_tp1": False}},
+          "salvate solo le voci personalizzate", over)
+    d.s["channel_overrides"] = over
+    row.set_custom(True)
+    after = eng.settings.get()
+    changed = {k for k in general_before if general_before[k] != after[k]}
+    check(changed == {"channel_overrides"}, "le impostazioni generali non cambiano", changed)
+    eff = eng.settings_for(row.cid)
+    check(eff["fixed_lot"] == 0.25 and eff["be_offset_points"] == 33 and eff["be_on_tp1"] is False,
+          "il canale usa le sue impostazioni")
+    other = eng.settings_for(CHATS[1][0])
+    check(other["fixed_lot"] == general_before["fixed_lot"] and other["be_on_tp1"] == general_before["be_on_tp1"],
+          "gli altri canali usano le generali")
+    # riapro: le scelte si vedono
+    cd = gui.ChannelSettingsDialog(d, eng, row.cid, row.name, d.current_values())
+    lot_item = next(it for it in cd.items if "lot_mode" in it[0])
+    check(lot_item[1].isChecked() and lot_item[2].findChildren(gui.QDoubleSpinBox)[0].value() == 0.25,
+          "riaprendo si vede la personalizzazione")
+    lot_item[1].setChecked(False)
+    check(lot_item[2].findChildren(gui.QDoubleSpinBox)[0].value() == general_before["fixed_lot"],
+          "togliendo «personalizza» torna il valore generale")
+    cd.reject()
+    check(eng.settings["channel_overrides"][str(row.cid)]["fixed_lot"] == 0.25, "annulla non cambia niente")
+    # apri e salva senza toccare: identico
+    cd = gui.ChannelSettingsDialog(d, eng, row.cid, row.name, d.current_values())
+    cd.save()
+    check(eng.settings["channel_overrides"] == over, "aprire e salvare il canale non cambia niente")
+    # «usa tutte le generali»
+    cd = gui.ChannelSettingsDialog(d, eng, CHATS[2][0], CHATS[2][1], d.current_values())
+    next(it for it in cd.items if it[0] == ["tp_hit_action"])[1].setChecked(True)
+    cd.save()
+    check(str(CHATS[2][0]) in eng.settings["channel_overrides"], "secondo canale personalizzato")
+    cd = gui.ChannelSettingsDialog(d, eng, CHATS[2][0], CHATS[2][1], d.current_values())
+    cd.reset()
+    cd.save()
+    check(str(CHATS[2][0]) not in eng.settings["channel_overrides"] and
+          str(CHATS[0][0]) in eng.settings["channel_overrides"], "«usa tutte le generali» toglie solo quel canale")
+    # salvare le impostazioni generali non cancella quelle dei canali
+    d.save()
+    check(eng.settings["channel_overrides"] == over, "salvare le generali conserva quelle dei canali")
+    d = gui.SettingsDialog(win, eng, "Telegram")
+    d.show()
+    QTest.qWait(200)
+    check({r.cid: r.custom for r in d.rows} == {CHATS[0][0]: True, CHATS[1][0]: False, CHATS[2][0]: False},
+          "⚙ blu sul canale personalizzato", [(r.name, r.custom) for r in d.rows])
+
+    def visible():
+        return [next(r for r in d.rows if r.cid == c).isVisible() for c, _ in CHATS]
+
+    # ---------------------------------------------------- 3c) solo i canali che inviano segnali
+    check(all(r.isVisible() for r in d.rows) and d.btn_signals.text() == "Solo canali con segnali",
+          "di base si vedono tutti i canali")
+    for r in d.rows:
+        r.switch.setChecked(False)
+        r.radar.setChecked(False)
+    d.toggle_signal_chats()
+    for _ in range(100):
+        QTest.qWait(50)
+        if not d._scanning:
+            break
+    vis = {r.name: r.isVisible() for r in d.rows}
+    check(vis == {CHATS[0][1]: True, CHATS[1][1]: False, CHATS[2][1]: True}, "nascosti i canali senza segnali", vis)
+    check(d.btn_signals.text() == "Mostra tutti" and "1 nascosti" in d.lbl_signals.text(), "pulsante e spiegazione",
+          (d.btn_signals.text(), d.lbl_signals.text()))
+    check(sorted(eng.settings["signal_chats"]) == sorted([CHATS[0][0], CHATS[2][0]]) and eng.settings["only_signal_chats"],
+          "scelta ricordata")
+    d.reject()
+    d = gui.SettingsDialog(win, eng, "Telegram")
+    d.show()
+    QTest.qWait(200)
+    check(visible() == [True, False, True], "riaprendo il filtro resta", visible())
+    d.ed_filter.setText("gruppo")
+    check(visible() == [False, False, True], "ricerca insieme al filtro", visible())
+    d.ed_filter.setText("")
+    d.btn_signals.click()
+    check(all(r.isVisible() for r in d.rows) and not eng.settings["only_signal_chats"], "«Mostra tutti»")
+    d.btn_signals.click()          # riattiva: ricontrolla i canali
+    for _ in range(100):
+        QTest.qWait(50)
+        if not d._scanning:
+            break
+    fx = next(r for r in d.rows if r.cid == CHATS[1][0])
+    check(not fx.isVisible(), "filtro di nuovo attivo")
+    fx.radar.setChecked(True)          # un canale nel Radar resta sempre visibile
+    d.filter_channels()
+    check(fx.isVisible(), "canale nel Radar sempre visibile anche senza segnali")
+    fx.radar.setChecked(False)
+    d.btn_signals.click()
+    check(all(r.isVisible() for r in d.rows), "tutti di nuovo visibili")
+    next(r for r in d.rows if r.cid == CHATS[2][0]).switch.setChecked(True)
+    check(sorted(r.cid for r in d.rows) == sorted(c for c, _ in CHATS), "nessun canale perso dal filtro")
+    d.save()
 
     # ---------------------------------------------------- 4) MetaTrader: installa il ponte
     experts = TMP / "home/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
