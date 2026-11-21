@@ -1,5 +1,3 @@
-3.6
-Il Radar ora si apre a destra dentro le Impostazioni, come Telegram e MetaTrader.
-Impostazioni per ogni canale: tocca ⚙ accanto al canale (le voci non personalizzate seguono quelle generali).
-Nuovo pulsante «Solo canali con segnali» per nascondere le chat che non mandano segnali.
-Il Radar segue le impostazioni generali e quelle di ogni canale: restano solo lotto e commissione per la stima.
+3.7
+Nuovo pulsante «Modifica elenco» nella pagina Telegram: scegli tu quali canali tenere nell'elenco, anche quelli che non hanno ancora inviato segnali.
+Le tue scelte restano anche quando ricontrolli i canali con segnali.

@@ -65,6 +65,8 @@ DEFAULTS = {
     "channel_overrides": {},  # impostazioni personalizzate per canale: {"id canale": {chiave: valore}}
     "signal_chats": None,     # canali/gruppi che hanno inviato segnali (None = non ancora controllato)
     "only_signal_chats": False,
+    "kept_chats": [],         # canali che hai aggiunto tu all'elenco (anche senza segnali)
+    "removed_chats": [],      # canali che hai tolto tu dall'elenco
     "zone_wait": False,
     "zone_wait_seconds": 15,
     "zone_margin_points": 0,

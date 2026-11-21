@@ -439,12 +439,17 @@ class ChannelRow(QFrame):
         self.switch.setToolTip("Copia: il programma esegue i segnali di questo canale")
         self.radar = Switch(radar, color=BLUE)
         self.radar.setToolTip("Radar: osserva il canale senza copiarlo")
+        self.pin = QPushButton("")           # «Modifica elenco»: tieni o togli il canale
+        self.pin.setCursor(Qt.PointingHandCursor)
+        self.pin.setFixedWidth(112)
+        self.pin.hide()
         self.gear = QPushButton("⚙")
         self.gear.setCursor(Qt.PointingHandCursor)
         self.gear.setFixedWidth(30)
         if on_gear:
             self.gear.clicked.connect(lambda: on_gear(self))
         lay.addWidget(self.lbl, 1)
+        lay.addWidget(self.pin)
         lay.addWidget(self.gear)
         lay.addWidget(self.radar)
         lay.addWidget(self.switch)
@@ -460,6 +465,23 @@ class ChannelRow(QFrame):
                              "Impostazioni di questo canale (ora usa quelle generali)")
         self.gear.setStyleSheet(f"QPushButton {{ background: transparent; border: none; padding: 2px; font-size: 15px;"
                                 f" color: {BLUE if custom else FAINT}; }} QPushButton:hover {{ color: {TEXT}; }}")
+
+    def set_listed(self, listed, locked=False):
+        """Pulsante della modifica elenco: ✓ = il canale resta nell'elenco."""
+        self.listed = listed
+        self.pin.setEnabled(not locked)
+        if locked:
+            self.pin.setText("✓ Sempre")
+            self.pin.setToolTip("È in Copia o nel Radar: resta sempre nell'elenco")
+        else:
+            self.pin.setText("✓ Nell'elenco" if listed else "＋ Aggiungi")
+            self.pin.setToolTip("Clic per togliere il canale dall'elenco" if listed else
+                                "Clic per tenere il canale nell'elenco")
+        col = GREEN if listed else MUTED
+        self.pin.setStyleSheet(f"QPushButton {{ background: transparent; border: 1px solid {BORDER}; border-radius: 6px;"
+                               f" padding: 3px 6px; color: {col}; font-size: 12px; }}"
+                               f" QPushButton:hover {{ border-color: {col}; }}"
+                               f" QPushButton:disabled {{ color: {FAINT}; }}")
 
     def _paint(self):
         on = self.switch.isChecked()
@@ -827,6 +849,11 @@ class SettingsDialog(QDialog):
         frow.addWidget(self.ed_filter, 1)
         self.btn_signals = _btn("", self.toggle_signal_chats)
         frow.addWidget(self.btn_signals)
+        self.btn_edit_list = _btn("Modifica elenco", self.toggle_edit_list)
+        self.btn_edit_list.setToolTip("Scegli tu quali canali tenere nell'elenco, anche se non hanno ancora "
+                                      "inviato segnali")
+        frow.addWidget(self.btn_edit_list)
+        self._editing = False
         ch.addLayout(frow)
         self.lbl_signals = _label("", "muted", wrap=True)
         ch.addWidget(self.lbl_signals)
@@ -882,6 +909,9 @@ class SettingsDialog(QDialog):
             return
         row = ChannelRow(cid, name, checked, self._channels_changed, radar, self._radar_changed,
                          self.open_channel_settings, bool(self.s["channel_overrides"].get(str(cid))))
+        row.pin.clicked.connect(lambda _c=False, r=row: self._toggle_listed(r))
+        self._paint_pin(row)
+        row.pin.setVisible(self._editing)
         self.rows.append(row)
         self.rows_box.addWidget(row)
         self.lbl_no_rows.hide()
@@ -901,6 +931,7 @@ class SettingsDialog(QDialog):
         lst = self._radar_list()
         self.engine.settings.update({"radar_channels": lst})
         self.s["radar_channels"] = lst
+        self._refresh_pins()
 
     def open_radar(self):
         self.nav.setCurrentRow(self.PAGES.index("Radar"))
@@ -913,6 +944,7 @@ class SettingsDialog(QDialog):
 
     def _channels_changed(self):
         """Salva subito i canali scelti e li mette in ascolto."""
+        self._refresh_pins()
         chans = self._checked_channels()
         self.engine.settings.update({"tg_channels": chans})
         self.s["tg_channels"] = chans
@@ -925,38 +957,94 @@ class SettingsDialog(QDialog):
         for r in self.rows:
             self._apply_filter(r)
 
+    def _locked(self, r):
+        return r.isChecked() or r.radar.isChecked()
+
+    def in_list(self, r) -> bool:
+        """Nell'elenco: canali in Copia/Radar, quelli aggiunti da te e quelli con segnali che non hai tolto."""
+        if self._locked(r) or r.cid in self.s["kept_chats"]:
+            return True
+        return r.cid in (self.s["signal_chats"] or []) and r.cid not in self.s["removed_chats"]
+
     def _apply_filter(self, r):
         text = self.ed_filter.text().lower()
         ok = text in r.name.lower()
-        if ok and self.s["only_signal_chats"] and self.s["signal_chats"] is not None:
-            # i canali già in Copia o nel Radar restano sempre visibili
-            ok = r.cid in self.s["signal_chats"] or r.isChecked() or r.radar.isChecked()
+        if ok and self.s["only_signal_chats"] and not self._editing:
+            ok = self.in_list(r)
         r.setVisible(ok)
+
+    def _paint_pin(self, r):
+        r.set_listed(self.in_list(r), self._locked(r))
+
+    def _refresh_pins(self):
+        if getattr(self, "_editing", False):
+            for r in self.rows:
+                self._paint_pin(r)
+
+    def _toggle_listed(self, r):
+        kept, removed = list(self.s["kept_chats"]), list(self.s["removed_chats"])
+        signals = self.s["signal_chats"] or []
+        if self.in_list(r):
+            kept = [c for c in kept if c != r.cid]
+            if r.cid in signals and r.cid not in removed:
+                removed.append(r.cid)
+        else:
+            removed = [c for c in removed if c != r.cid]
+            if r.cid not in signals and r.cid not in kept:
+                kept.append(r.cid)
+        vals = {"kept_chats": kept, "removed_chats": removed}
+        self.engine.settings.update(vals)
+        self.s.update(vals)
+        self._paint_pin(r)
+        self._update_signal_button()
+
+    def toggle_edit_list(self):
+        if self._scanning:
+            return
+        self._editing = not self._editing
+        if self._editing and not self.s["only_signal_chats"]:
+            self.engine.settings.update({"only_signal_chats": True})
+            self.s["only_signal_chats"] = True
+        for r in self.rows:
+            self._paint_pin(r)
+            r.pin.setVisible(self._editing)
+        self.filter_channels()
+        self._update_signal_button()
 
     def _update_signal_button(self):
         if self._scanning:
             return
-        on = self.s["only_signal_chats"] and self.s["signal_chats"] is not None
+        on = self.s["only_signal_chats"]
+        self.btn_edit_list.setText("Fatto" if self._editing else "Modifica elenco")
+        self.btn_edit_list.setObjectName("primary" if self._editing else "")
+        self.btn_edit_list.setStyle(self.btn_edit_list.style())
+        self.btn_signals.setVisible(not self._editing)
         self.btn_signals.setText("Mostra tutti" if on else "Solo canali con segnali")
         self.btn_signals.setToolTip("Torna a vedere tutti i canali" if on else
                                     "Controlla gli ultimi messaggi di ogni canale e nasconde quelli che non inviano segnali")
-        if on:
-            hidden = sum(1 for r in self.rows if not r.isVisible())
-            self.lbl_signals.setText(f"Mostro solo i canali che inviano segnali ({hidden} nascosti). "
-                                     "Premi «Aggiorna elenco» e poi di nuovo il pulsante per ricontrollare.")
-        self.lbl_signals.setVisible(on)
+        if self._editing:
+            n = sum(1 for r in self.rows if self.in_list(r))
+            self.lbl_signals.setText(f"Scegli tu i canali dell'elenco ({n} scelti): «＋ Aggiungi» per tenerlo, "
+                                     "clic su «✓ Nell'elenco» per toglierlo. Poi premi «Fatto».")
+        elif on:
+            hidden = sum(1 for r in self.rows if not self.in_list(r))
+            self.lbl_signals.setText(f"Mostro solo i canali del tuo elenco ({hidden} nascosti). «Modifica elenco» per "
+                                     "aggiungerne o toglierne; «Aggiorna elenco» e «Solo canali con segnali» per "
+                                     "ricontrollare i segnali (le tue scelte restano).")
+        self.lbl_signals.setVisible(on or self._editing)
 
     def toggle_signal_chats(self):
         if self._scanning:
             return
-        if self.s["only_signal_chats"] and self.s["signal_chats"] is not None:
-            self._set_signal_filter(False, self.s["signal_chats"])
+        if self.s["only_signal_chats"]:
+            self._set_signal_filter(False, self.s["signal_chats"] or [])
             return
         if not self.engine.tg_authorized:
             QMessageBox.information(self, "Telegram", "Prima accedi a Telegram.")
             return
         self._scanning = True
         self.btn_signals.setEnabled(False)
+        self.btn_edit_list.setEnabled(False)
         self.btn_signals.setText("Controllo…")
         self.lbl_signals.setText("Leggo gli ultimi messaggi di ogni canale…")
         self.lbl_signals.show()
@@ -972,6 +1060,7 @@ class SettingsDialog(QDialog):
             poll.deleteLater()
             self._scanning = False
             self.btn_signals.setEnabled(True)
+            self.btn_edit_list.setEnabled(True)
             try:
                 found = fut.result()
             except Exception as e:

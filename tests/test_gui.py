@@ -370,6 +370,66 @@ def main():
     check(sorted(r.cid for r in d.rows) == sorted(c for c, _ in CHATS), "nessun canale perso dal filtro")
     d.save()
 
+    # ---------------------------------------------------- 3d) elenco scelto a mano (anche canali senza segnali)
+    VIP, FX, AMICI = CHATS[0][0], CHATS[1][0], CHATS[2][0]
+    d = gui.SettingsDialog(win, eng, "Telegram")
+    d.show()
+    QTest.qWait(200)
+
+    def r_(cid):
+        return next(r for r in d.rows if r.cid == cid)
+
+    def vis():
+        return {c: r_(c).isVisible() for c, _ in CHATS}
+    check(all(vis().values()) and not any(r.pin.isVisible() for r in d.rows), "pulsanti dell'elenco nascosti di base")
+    d.btn_edit_list.click()
+    check(d._editing and d.btn_edit_list.text() == "Fatto" and all(vis().values()) and
+          all(r.pin.isVisible() for r in d.rows), "«Modifica elenco» mostra tutti i canali con il pulsante")
+    check(r_(FX).pin.text() == "＋ Aggiungi" and r_(VIP).pin.text() == "✓ Nell'elenco" and
+          r_(AMICI).pin.text() == "✓ Sempre" and not r_(AMICI).pin.isEnabled(),
+          "stato di ogni canale (senza segnali / con segnali / in Copia)", [r.pin.text() for r in d.rows])
+    QTest.mouseClick(r_(FX).pin, Qt.LeftButton)          # aggiungo un canale che non manda ancora segnali
+    check(r_(FX).pin.text() == "✓ Nell'elenco" and not r_(FX).isChecked(), "aggiunto, senza attivare la copia")
+    QTest.mouseClick(r_(VIP).pin, Qt.LeftButton)         # tolgo un canale che manda segnali
+    check(r_(VIP).pin.text() == "＋ Aggiungi" and not r_(VIP).isChecked(), "tolto dall'elenco")
+    d.btn_edit_list.click()
+    check(not d._editing and vis() == {VIP: False, FX: True, AMICI: True}, "«Fatto»: si vede solo il mio elenco", vis())
+    check(eng.settings["kept_chats"] == [FX] and eng.settings["removed_chats"] == [VIP], "scelte salvate")
+    # ricontrollare i segnali non cancella le scelte
+    d.btn_signals.click()                                 # mostra tutti
+    check(all(vis().values()), "«Mostra tutti»")
+    d.btn_signals.click()                                 # ricontrolla
+    for _ in range(100):
+        QTest.qWait(50)
+        if not d._scanning:
+            break
+    check(vis() == {VIP: False, FX: True, AMICI: True}, "dopo il nuovo controllo le mie scelte restano", vis())
+    d.reject()
+    d = gui.SettingsDialog(win, eng, "Telegram")
+    d.show()
+    QTest.qWait(200)
+    check(vis() == {VIP: False, FX: True, AMICI: True}, "riaprendo l'elenco è lo stesso", vis())
+    # rimetto il canale tolto e tolgo quello aggiunto
+    d.btn_edit_list.click()
+    QTest.mouseClick(r_(VIP).pin, Qt.LeftButton)
+    QTest.mouseClick(r_(FX).pin, Qt.LeftButton)
+    d.btn_edit_list.click()
+    check(vis() == {VIP: True, FX: False, AMICI: True} and eng.settings["kept_chats"] == []
+          and eng.settings["removed_chats"] == [], "si può tornare indietro", vis())
+    # in modifica, accendere il Radar blocca il canale come «Sempre»
+    d.btn_edit_list.click()
+    r_(FX).radar.setChecked(True)
+    check(r_(FX).pin.text() == "✓ Sempre", "canale nel Radar: sempre nell'elenco")
+    r_(FX).radar.setChecked(False)
+    check(r_(FX).pin.text() == "＋ Aggiungi", "spento il Radar torna come prima")
+    d.resize(940, 660)
+    QTest.qWait(50)
+    d.grab().save(str(TMP / "elenco.png"))
+    d.btn_edit_list.click()
+    before = eng.settings.get()
+    d.save()
+    check(eng.settings.get() == before, "salvare non cambia l'elenco")
+
     # ---------------------------------------------------- 4) MetaTrader: installa il ponte
     experts = TMP / "home/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
     experts.mkdir(parents=True)
