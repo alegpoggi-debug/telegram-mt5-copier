@@ -184,7 +184,8 @@ def main():
     ea.start()
     ui = gui.UiBridge()
     eng = Engine(ui)
-    eng.settings.update({"mt5_dir": str(TMP / "Common/Files"), "tg_api_id": "123", "tg_api_hash": "h" * 32})
+    eng.settings.update({"mt5_dir": str(TMP / "Common/Files"), "tg_api_id": "123", "tg_api_hash": "h" * 32,
+                         "days": list(range(7))})   # le prove devono funzionare in qualsiasi giorno
     win = gui.MainWindow(ui, eng)
     win.show()
     eng.start()
@@ -326,6 +327,21 @@ def main():
     rw.btn_run.click()
     wait_until(lambda: not rw.running, 60)
     check(rw.report.settings_sig == radar.settings_sig(eff0), "tornato alle impostazioni generali")
+
+    # giorni attivi: il Radar salta i segnali dei giorni in cui la copia non opera (come la copia vera)
+    sig_days = {dt.datetime.fromtimestamp(x.t, dt.timezone.utc).astimezone().weekday() for x in rw.report.signals}
+    off = sorted(sig_days)[0]
+    eng.settings.update({"days": [d for d in range(7) if d != off]})
+    rw.btn_run.click()
+    wait_until(lambda: not rw.running, 60)
+    skipped = [x for x in rw.report.signals if x.status == "ignorato: giorno non attivo"]
+    check(skipped and all(dt.datetime.fromtimestamp(x.t, dt.timezone.utc).astimezone().weekday() == off for x in skipped),
+          "segnali dei giorni non attivi saltati", [(x.status, x.t) for x in rw.report.signals])
+    check(rw.report.stats["signals"] == 10, "i segnali saltati restano nell'elenco")
+    eng.settings.update({"days": list(range(7))})
+    rw.btn_run.click()
+    wait_until(lambda: not rw.running, 60)
+    check(not any(x.status.startswith("ignorato: giorno") for x in rw.report.signals), "tutti i giorni attivi")
 
     # seconda analisi: i prezzi sono già salvati sul disco
     calls = ea.rates_calls
