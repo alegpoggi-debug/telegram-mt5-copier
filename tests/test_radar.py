@@ -122,6 +122,27 @@ def main():
     b = bars_from([2004.0] * 40 + ramp(2004, 2012, 20))
     sig, *_ = run([(T0, "BUY GOLD 2000-2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=60), b)
     check(sig[0].status.startswith("ignorato") and "fascia" in sig[0].status, "non rientra: segnale ignorato", sig[0].status)
+    # un solo prezzo (BUY NOW 2002): aspetta che il prezzo torni vicino, come la copia vera
+    b = bars_from([2008.0] * 10 + ramp(2008, 2002, 4) + ramp(2002, 2012, 20) + [2012] * 20)
+    sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=600,
+                                                                        zone_margin_points=50), b)
+    check(sig[0].status == "vinto" and abs(sig[0].entry_p - 2002.5) < 1e-6, "un solo prezzo: entra quando ci arriva",
+          (sig[0].status, sig[0].entry_p))
+    b = bars_from([2008.0] * 40 + ramp(2008, 2012, 20))
+    sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=60,
+                                                                        zone_margin_points=50), b)
+    check(sig[0].status == "ignorato: prezzo lontano da quello del segnale", "un solo prezzo lontano: ignorato",
+          sig[0].status)
+    sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=False), b)
+    check(sig[0].status == "vinto" and abs(sig[0].entry_p - 2008) < 1e-6, "opzione spenta: entra subito come prima",
+          (sig[0].status, sig[0].entry_p))
+    # due segnali nello stesso istante con prezzi diversi: ognuno entra al suo prezzo
+    b = bars_from([2008.0] * 10 + ramp(2008, 2003, 5) + [2003.0] * 5 + ramp(2003, 1999, 5) + ramp(1999, 2015, 20))
+    sig, *_ = run([(T0, "BUY GOLD NOW 2003 SL 1990 TP 2012", None), (T0, "BUY GOLD NOW 1999 SL 1990 TP 2012", None)],
+                  S(zone_wait=True, zone_wait_seconds=1800, zone_margin_points=30), b)
+    check(len(sig) == 2 and abs(sig[0].entry_p - 2003.3) < 1e-6 and abs(sig[1].entry_p - 1999.3) < 1e-6
+          and sig[0].entry_t < sig[1].entry_t, "stesso istante, prezzi diversi: due entrate diverse",
+          [(x.status, x.entry_p, x.entry_t) for x in sig])
 
     # 10) ordine limit: eseguito solo se il prezzo ci arriva
     b = bars_from([2005.0] * 15 + ramp(2005, 1999, 10) + ramp(1999, 2012, 20))
@@ -246,22 +267,18 @@ def main():
     sig, msgs, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None), (T0 + 11 * 60, "BUY GOLD 2000 SL 1990 TP 2010", None)],
                            S(), b)
     check(len(sig) == 2 and st["duplicates"] == 0, "oltre la finestra di 10 minuti: segnale nuovo")
-    # stesso segnale riscritto: doppio anche nel Radar (come nella copia vera)
+    # stesso segnale riscritto (stessi valori): doppio anche nel Radar; valori diversi: segnale nuovo
     sig, msgs, st, _ = run([(T0, "BUY GOLD 2000-2003 SL 1990 TP 2010 TP 2020", None),
-                            (T0 + 20, "BUY GOLD 2003-2000 SL 1990 TP 2020 TP 2010", None),
-                            (T0 + 40, "Gold buy now\nSL 1990\nTP 2010", None),
-                            (T0 + 60, "BUY LIMIT GOLD 2001 SL 1990 TP 2010 TP 2020 TP 2030", None),
-                            (T0 + 70, "BUY GOLD 1996 SL 1990 TP 2010 TP 2020", None),
-                            (T0 + 80, "BUY GOLD 2000 SL 1985 TP 2010", None),
+                            (T0, "BUY GOLD 2003-2000 SL 1990 TP 2020 TP 2010", None),
+                            (T0, "📢 Gold buy 2000/2003\nSL: 1990\nTP1: 2010\nTP2: 2020", None),
+                            (T0, "BUY GOLD 1996 SL 1990 TP 2010 TP 2020", None),
+                            (T0 + 1, "BUY GOLD 2000 SL 1985 TP 2010", None),
+                            (T0 + 1, "BUY GOLD 2000-2003 SL 1990 TP 2012 TP 2020", None),
                             (T0 + 100, "SELL GOLD 2000 SL 2010 TP 1990", None),
-                            (T0 + 120, "SELL GOLD 2004 SL 2014 TP 1995", None),
-                            (T0 + 20 * 60, "BUY GOLD 2000 SL 1985 TP 2010", None)], S(), b)
-    check(st["duplicates"] == 6 and [m.note for m in msgs] == ["segnale", "doppio: ignorato", "doppio: ignorato",
-                                                               "doppio: ignorato", "doppio: ignorato",
-                                                               "doppio: ignorato", "segnale", "doppio: ignorato",
-                                                               "segnale"],
-          "stessa direzione entro i minuti: un solo segnale; direzione opposta o dopo i minuti: nuovo",
-          [m.note for m in msgs])
+                            (T0 + 20 * 60, "BUY GOLD 2000-2003 SL 1990 TP 2010 TP 2020", None)], S(), b)
+    check(st["duplicates"] == 2 and [m.note for m in msgs] == ["segnale", "doppio: ignorato", "doppio: ignorato",
+                                                               "segnale", "segnale", "segnale", "segnale", "segnale"],
+          "doppio solo con gli stessi valori; entrata, SL o TP diversi: segnale nuovo", [m.note for m in msgs])
 
     # 26) dentro lo stesso minuto: candela ribassista (massimo prima del minimo) → prima il TP
     b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.5, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 120)

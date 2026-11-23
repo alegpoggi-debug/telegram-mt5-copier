@@ -208,10 +208,20 @@ def fingerprint(r: dict, cid=None, reply_id=None):
     return None
 
 
+def _levels(fp):
+    """Valori del segnale senza badare a come è scritto: fascia in qualsiasi ordine, TP in qualsiasi ordine."""
+    _k, sym, side, _otype, e1, e2, sl, tps = fp
+    entry = tuple(sorted(x for x in (e1, e2) if x is not None))
+    if len(entry) == 2 and entry[0] == entry[1]:
+        entry = entry[:1]
+    return sym, side, entry, sl, tuple(sorted(tps))
+
+
 def _same_signal(a, b) -> bool:
-    """Entro i minuti dei doppi, lo stesso simbolo nella stessa direzione è un solo segnale,
-    anche se il messaggio ripetuto cambia entrata, Stop Loss o TP (seconda entrata, segnale riscritto)."""
-    return (a[1], a[2]) == (b[1], b[2])
+    """Doppio = stesso segnale con gli STESSI valori (simbolo, direzione, entrata, SL e TP), anche se scritto in
+    modo diverso (testo in più, maiuscole, TP in altro ordine, fascia al contrario, LIMIT/NOW con lo stesso prezzo).
+    Se cambia l'entrata, lo SL o anche un solo TP è un segnale diverso."""
+    return _levels(a) == _levels(b)
 
 
 def find_duplicate(fp, seen):

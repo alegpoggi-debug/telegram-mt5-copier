@@ -265,8 +265,9 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             entry_t = t_exec
         first_check = i + 1
         price = bid + sp(i) if buy else bid
-        if s["zone_wait"] and sig.entry is not None and sig.entry2 is not None and not s["reverse"]:
-            lo, hi = sorted((sig.entry, sig.entry2))
+        if s["zone_wait"] and sig.entry is not None and not s["reverse"]:
+            # fascia del segnale, oppure il suo unico prezzo (come la copia vera)
+            lo, hi = sorted((sig.entry, sig.entry2 if sig.entry2 is not None else sig.entry))
             m = s["zone_margin_points"] * pt
             if not (lo - m <= price <= hi + m):
                 deadline = sig.t + max(0, s["zone_wait_seconds"])
@@ -279,7 +280,8 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
                         found = (j, hi + m if price > hi + m else lo - m)
                         break
                 if not found:
-                    sig.status = "ignorato: prezzo fuori dalla fascia"
+                    sig.status = ("ignorato: prezzo fuori dalla fascia" if sig.entry2 is not None else
+                                  "ignorato: prezzo lontano da quello del segnale")
                     return
                 first_check, price, entry_t = found[0], found[1], bars[found[0]][0]
         entry_p = price

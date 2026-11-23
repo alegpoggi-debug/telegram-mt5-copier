@@ -1,3 +1,4 @@
-3.11
-Messaggi doppi: entro i minuti dei doppi, lo stesso simbolo nella stessa direzione vale come un solo segnale
-(anche se entrata, SL o TP cambiano). Direzione opposta, altro simbolo o dopo i minuti: segnale nuovo.
+3.12
+Messaggi doppi: è doppio solo un segnale con gli stessi valori (entrata, SL e TP), anche se scritto in modo diverso.
+Segnali diversi arrivati nello stesso momento ora contano entrambi.
+«Aspetta il prezzo del segnale» vale anche per i segnali con un solo prezzo (es. BUY NOW 2345): copia e Radar entrano solo quando il prezzo è vicino a quello del messaggio.

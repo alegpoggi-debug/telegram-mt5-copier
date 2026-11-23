@@ -174,10 +174,34 @@ async def main():
     opens, el, logs = await signal(BUY, zone_wait=False, max_spread_points=30, zone_wait_seconds=0)
     check(not opens and el < 1.5, "solo spread massimo (senza fascia): controllato anche da solo", logs)
 
-    # H) segnale con un solo prezzo: non cambia nulla
+    # H) segnale con un solo prezzo (BUY NOW 2348): aspetta che il prezzo sia vicino a quello del segnale
     ea.bid, ea.ask = 2353.00, 2353.20
-    opens, el, _ = await signal("BUY GOLD 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2)
-    check(len(opens) == 1 and el < 1.5, "un solo prezzo: entra come prima", el)
+    opens, el, logs = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2,
+                                   zone_margin_points=50)
+    check(not opens and 1.8 < el < 4.0 and any("lontano da quello del segnale (2348)" in x for x in logs),
+          "un solo prezzo lontano: aspetta e poi lascia perdere", (el, logs))
+    ea.bid, ea.ask = 2347.90, 2348.10
+    opens, el, _ = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2,
+                                zone_margin_points=50)
+    check(len(opens) == 1 and el < 1.5, "un solo prezzo vicino: entra subito", el)
+    ea.bid, ea.ask = 2353.00, 2353.20
+
+    async def comes_back():
+        await asyncio.sleep(1)
+        ea.bid, ea.ask = 2348.20, 2348.40
+    asyncio.create_task(comes_back())
+    opens, el, logs = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=6,
+                                   zone_margin_points=50)
+    check(len(opens) == 1 and 0.8 < el < 3.5 and any("vicino a quello del segnale: entro" in x for x in logs),
+          "un solo prezzo: entra quando il prezzo arriva", (el, logs))
+    ea.bid, ea.ask = 2353.00, 2353.20
+    opens, el, _ = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2,
+                                zone_margin_points=600)
+    check(len(opens) == 1 and el < 1.5, "margine ampio: entra", el)
+    opens, el, _ = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=False)
+    check(len(opens) == 1 and el < 1.5, "opzione spenta: entra subito come prima", el)
+    opens, el, _ = await signal("BUY GOLD NOW SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2)
+    check(len(opens) == 1 and el < 1.5, "segnale senza prezzo: entra subito", el)
 
     # I) più TP: un solo controllo, poi tutte le posizioni
     ea.bid, ea.ask = 2347.80, 2348.00

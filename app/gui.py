@@ -576,7 +576,7 @@ class ChannelSettingsDialog(QDialog):
         # entrata
         c, cl = _card(spacing=12)
         cl.addWidget(_label("ENTRATA", "section"))
-        self._switch(cl, "Aspetta il prezzo nella fascia", None, "zone_wait", eff)
+        self._switch(cl, "Aspetta il prezzo del segnale", None, "zone_wait", eff)
         self._spin(cl, "Tempo massimo di attesa", None, "zone_wait_seconds", 0, 3600, " secondi", eff)
         bl.addWidget(c)
 
@@ -1209,8 +1209,9 @@ class SettingsDialog(QDialog):
         c6, l6 = _card(spacing=14)
         l6.addWidget(_label("ENTRATA", "section"))
         self.sw_zone = Switch(s["zone_wait"])
-        self._row(l6, "Aspetta il prezzo nella fascia", "Se il segnale indica due prezzi (es. 2345–2350) e il prezzo "
-                  "attuale è fuori, aspetta che rientri. Se non rientra in tempo, il segnale viene ignorato.", self.sw_zone)
+        self._row(l6, "Aspetta il prezzo del segnale", "Se il prezzo attuale è fuori dalla fascia del segnale (es. "
+                  "2345–2350) o lontano dal suo prezzo (es. BUY NOW 2345), aspetta che ci arrivi. Se non arriva in "
+                  "tempo, il segnale viene ignorato. Vale anche per il Radar.", self.sw_zone)
         self.sp_zone_sec = QSpinBox()
         self.sp_zone_sec.setRange(0, 3600)
         self.sp_zone_sec.setSuffix(" secondi")
@@ -1226,7 +1227,8 @@ class SettingsDialog(QDialog):
         zw.setContentsMargins(0, 0, 0, 0)
         zw.setSpacing(14)
         self._row(zw, "Tempo massimo di attesa", "Quanto aspettare che il prezzo rientri. 0 = non aspetta.", self.sp_zone_sec)
-        self._row(zw, "Margine fuori fascia", "Accetta anche un prezzo appena fuori dalla fascia. 0 = solo dentro.",
+        self._row(zw, "Margine", "Quanto può essere lontano il prezzo dalla fascia o dal prezzo del segnale. "
+                  "Oro: 100 punti = 1 dollaro.",
                   self.sp_zone_margin)
         l6.addWidget(self.zone_wrap)
         self.sw_zone.toggled.connect(self.zone_wrap.setVisible)

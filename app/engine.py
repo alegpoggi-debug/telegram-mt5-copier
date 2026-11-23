@@ -682,18 +682,20 @@ class Engine:
         return float(res.get("price") or 0), float(m.group(1)), float(m.group(2))
 
     async def _entry_gate(self, r, order, s) -> str | None:
-        """Fascia di entrata e spread. None = si può entrare, altrimenti il motivo per non entrare.
+        """Prezzo del segnale e spread. None = si può entrare, altrimenti il motivo per non entrare.
 
-        Se il prezzo è fuori dalla fascia del segnale (o lo spread è troppo alto) aspetta fino al tempo
-        scelto, controllando ogni mezzo secondo; se non rientra, il segnale viene lasciato perdere.
+        Se il prezzo è fuori dalla fascia del segnale, o lontano dal suo prezzo se ne indica uno solo
+        (o lo spread è troppo alto), aspetta fino al tempo scelto controllando ogni mezzo secondo;
+        se non ci arriva, il segnale viene lasciato perdere.
         """
-        zone = s["zone_wait"] and r.get("entry") is not None and r.get("entry2") is not None and not s["reverse"]
+        zone = s["zone_wait"] and r.get("entry") is not None and not s["reverse"]
         spread_limit = s["max_spread_points"]
         if order["otype"] != "MARKET" or not (zone or spread_limit):
             return None
         if self.bridge is None or not self.mt5_connected():
             return None if s["dry_run"] else "MetaTrader non collegato"
-        lo, hi = (sorted((r["entry"], r["entry2"])) if zone else (None, None))
+        two = r.get("entry2") is not None
+        lo, hi = (sorted((r["entry"], r["entry2"] if two else r["entry"])) if zone else (None, None))
         buy = order["side"] == "BUY"
         wait = max(0, int(s["zone_wait_seconds"]))
         deadline = time.monotonic() + wait
@@ -707,12 +709,14 @@ class Engine:
                 margin = s["zone_margin_points"] * pt
                 problems = []
                 if zone and not (lo - margin <= price <= hi + margin):
-                    problems.append(f"prezzo {price:g} fuori dalla fascia {lo:g}–{hi:g}")
+                    problems.append(f"prezzo {price:g} fuori dalla fascia {lo:g}–{hi:g}" if two else
+                                    f"prezzo {price:g} lontano da quello del segnale ({lo:g})")
                 if spread_limit and pt and (ask - bid) > spread_limit * pt + pt / 2:
                     problems.append(f"spread {round((ask - bid) / pt)} punti (massimo {spread_limit})")
                 if not problems:
                     if told:
-                        self.ui.on_log(f"  → prezzo {price:g} nella fascia: entro", "trade")
+                        self.ui.on_log(f"  → prezzo {price:g} " + ("nella fascia" if two else "vicino a quello del segnale")
+                                       + ": entro", "trade")
                     return None
                 last_problem = " e ".join(problems)
                 if not told and wait:

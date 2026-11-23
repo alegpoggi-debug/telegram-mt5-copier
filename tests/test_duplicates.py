@@ -69,33 +69,29 @@ async def main():
     a, _, _ = await msg(S, cid=-2)
     check(not a, "stesso segnale da un altro canale: ignorato")
     a, _, _ = await msg("BUY GOLD 2345-2350 SL 2338 TP 2360")
-    check(not a, "stessa direzione con SL diverso, entro i minuti: ignorato")
+    check(len(a) == 1, "SL diverso: è un segnale nuovo")
     a, _, _ = await msg("SELL GOLD 2345-2350 SL 2355 TP 2330")
     check(len(a) == 1, "direzione diversa: è un segnale nuovo")
 
-    # stesso segnale riscritto in modo diverso: è sempre un doppio
+    # stesso segnale (stessi valori) scritto in modo diverso: è sempre un doppio
     for text, why in (("BUY GOLD 2350-2345 SL 2340 TP 2360", "fascia scritta al contrario"),
-                      ("BUY GOLD 2348 SL 2340 TP 2360", "prezzo dentro la fascia"),
-                      ("BUY GOLD NOW SL 2340 TP 2360", "senza prezzo (NOW)"),
-                      ("BUY LIMIT GOLD 2345 SL 2340 TP 2360", "LIMIT invece che a mercato"),
-                      ("BUY GOLD 2345-2350 SL 2340 TP 2360 TP 2370", "con un TP in più"),
-                      ("📢 SEGNALE\nGold buy 2345/2350\nSL: 2340\nTP1: 2360\nBuona fortuna!", "con testo in più")):
+                      ("BUY LIMIT GOLD 2345-2350 SL 2340 TP 2360", "LIMIT con gli stessi prezzi"),
+                      ("📢 SEGNALE\nGold buy 2345/2350\nSL: 2340\nTP1: 2360\nBuona fortuna!", "con testo in più"),
+                      ("buy xauusd 2345-2350 sl 2340 tp 2360", "minuscole e altro nome del simbolo")):
         a, logs, _ = await msg(text)
         check(not a and any("doppio ignorato" in x for x in logs), f"riscritto ({why}): ignorato", (text, logs))
     a, _, _ = await msg("SELL EURUSD 1.0850 SL 1.0880 TP 1.0800 TP 1.0780", cid=-2)
     b, _, _ = await msg("SELL EURUSD 1.0850 SL 1.0880 TP 1.0780 TP 1.0800", cid=-2)
     check(len(a) == 2 and not b, "TP in ordine diverso: ignorato", (len(a), len(b)))
-    # ma un segnale davvero diverso resta nuovo
-    a, logs, _ = await msg("BUY GOLD 2352-2355 SL 2340 TP 2360")
-    check(not a and any("doppio ignorato" in x for x in logs), "seconda entrata con stessi SL e TP: ignorata", logs)
-    a, _, _ = await msg("BUY GOLD 2352-2355 SL 2340 TP 2358 TP 2360")
-    check(not a, "seconda entrata con TP1 diverso: ignorata")
-    a, _, _ = await msg("BUY GOLD 2341 SL 2336 TP 2360")
-    check(not a, "seconda entrata con SL diverso: ignorata")
-    a, _, _ = await msg("BUY EURUSD 1.0850 SL 1.0820 TP 1.0900")
-    check(len(a) == 1, "altro simbolo: segnale nuovo")
-    a, _, _ = await msg("BUY GOLD 2345-2350 SL 2340 TP 2365")
-    check(not a, "stessa direzione con TP diverso, entro i minuti: ignorato")
+    # un segnale con valori diversi è sempre nuovo, anche nello stesso istante
+    for text, why, n in (("BUY GOLD 2348 SL 2340 TP 2360", "entrata diversa", 1),
+                         ("BUY GOLD 2352-2355 SL 2340 TP 2360", "seconda entrata a un altro prezzo", 1),
+                         ("BUY GOLD 2345-2350 SL 2340 TP 2365", "TP diverso", 1),
+                         ("BUY GOLD 2345-2350 SL 2340 TP 2360 TP 2370", "un TP in più", 2),
+                         ("BUY GOLD 2341 SL 2336 TP 2358", "entrata, SL e TP diversi", 1),
+                         ("BUY EURUSD 1.0850 SL 1.0820 TP 1.0900", "altro simbolo", 1)):
+        a, _, _ = await msg(text)
+        check(len(a) == n, f"{why}: segnale nuovo", (text, len(a)))
 
     # gestione: "chiudete metà" ripetuto non chiude due volte
     await asyncio.sleep(0.2)
