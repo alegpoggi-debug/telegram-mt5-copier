@@ -1,4 +1,3 @@
-3.9
-Protezione dai messaggi doppi più precisa (copia e Radar): riconosce lo stesso segnale anche se riscritto
-(fascia al contrario, TP in altro ordine o uno in più, senza prezzo, LIMIT invece che a mercato, testo in più).
-Un segnale con SL o direzione diversi resta un segnale nuovo.
+3.10
+Messaggi doppi: una seconda entrata a un prezzo diverso ma con gli stessi SL e TP, entro i minuti dei doppi, ora è ignorata (copia e Radar).
+Se cambiano anche lo SL o un TP resta un segnale nuovo.

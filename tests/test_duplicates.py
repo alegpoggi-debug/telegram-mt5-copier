@@ -86,8 +86,12 @@ async def main():
     b, _, _ = await msg("BUY GOLD 2346 SL 2339 TP 2356 TP 2361", cid=-2)
     check(len(a) == 2 and not b, "TP in ordine diverso: ignorato", (len(a), len(b)))
     # ma un segnale davvero diverso resta nuovo
-    a, _, _ = await msg("BUY GOLD 2352-2355 SL 2340 TP 2360")
-    check(len(a) == 1, "entrata diversa (fasce che non si toccano): segnale nuovo")
+    a, logs, _ = await msg("BUY GOLD 2352-2355 SL 2340 TP 2360")
+    check(not a and any("doppio ignorato" in x for x in logs), "seconda entrata con stessi SL e TP: ignorata", logs)
+    a, _, _ = await msg("BUY GOLD 2352-2355 SL 2340 TP 2358 TP 2360")
+    check(len(a) == 2, "entrata diversa e TP1 diverso: segnale nuovo", len(a))
+    a, _, _ = await msg("BUY GOLD 2341 SL 2336 TP 2360")
+    check(len(a) == 1, "entrata e SL diversi (stesso TP): segnale nuovo")
     a, _, _ = await msg("BUY GOLD 2345-2350 SL 2340 TP 2365")
     check(len(a) == 1, "TP diverso: segnale nuovo")
 
