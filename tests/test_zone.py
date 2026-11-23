@@ -322,6 +322,39 @@ async def main():
     opens, el, _ = await signal(BUY, lot_mode="fixed", fixed_lot=0.02, channel_overrides={})
     check(len(opens) == 1 and float(opens[0]["volume"]) == 0.02, "senza personalizzazioni: lotto generale")
 
+    # N) mentre un segnale aspetta il prezzo, gli altri messaggi vengono eseguiti subito
+    #    e non toccano l'operazione che non è ancora aperta
+    base = {k: v for k, v in DEFAULTS.items() if not k.startswith("tg_")}
+    base.update({"mt5_dir": str(common), "dry_run": False, "max_trades_per_symbol": 99, "max_open_trades": 99,
+                 "max_total_lots": 99, "ignore_duplicates": False, "days": list(range(7)), "zone_wait": True,
+                 "zone_wait_seconds": 6, "zone_margin_points": 50, "min_sl_distance_pips": 0, "follow_close": True})
+    eng.settings.update(base)
+    ea.positions.clear()
+    ea.bid, ea.ask = 2347.80, 2348.00
+    await asyncio.sleep(0.1)
+    eng.state = eng.bridge.read_state()
+    await eng._handle(types.SimpleNamespace(id=900, message=BUY, reply_to_msg_id=None), -1, False)
+    first_ticket = max(ea.positions)
+    await asyncio.sleep(0.15)
+    eng.state = eng.bridge.read_state()
+    ea.bid, ea.ask = 2360.00, 2360.20               # il prossimo segnale dovrà aspettare
+    n0 = len(ea.received)
+    waiting = asyncio.create_task(eng._handle(types.SimpleNamespace(
+        id=901, message="BUY GOLD 2345-2350 SL 2340 TP 2370", reply_to_msg_id=None), -1, False))
+    await asyncio.sleep(1.0)
+    t0 = time.monotonic()
+    await asyncio.wait_for(eng._handle(types.SimpleNamespace(id=902, message="chiudete", reply_to_msg_id=900), -1, False), 3)
+    fast = time.monotonic() - t0
+    closes = [c for c in ea.received[n0:] if c["action"] == "CLOSE"]
+    check(fast < 1.5 and [int(c["ticket"]) for c in closes] == [first_ticket] and not waiting.done(),
+          "durante l'attesa: «chiudete» eseguito subito sull'operazione già aperta", (fast, closes, waiting.done()))
+    ea.bid, ea.ask = 2348.20, 2348.40               # il prezzo torna: il segnale in attesa entra
+    await asyncio.wait_for(waiting, 10)
+    opened = [c for c in ea.received[n0:] if c["action"] == "OPEN"]
+    check(len(opened) == 1 and len([c for c in ea.received[n0:] if c["action"] == "CLOSE"]) == 1,
+          "il segnale in attesa entra dopo e il «chiudete» di prima non lo chiude", (opened, closes))
+    check(not eng.lock.locked(), "turno dei messaggi libero alla fine")
+
     print(f"TUTTI I {len(PASSED)} TEST DELLA FASCIA DI ENTRATA SUPERATI")
 
 

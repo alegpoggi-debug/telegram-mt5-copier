@@ -1,5 +1,5 @@
-3.14
-Nuova impostazione «Distanza minima dallo Stop Loss» (40 pips): non entra se il prezzo è a quella distanza dallo SL o meno,
-o se l'ha già superato. Vale per la copia e per il Radar, anche per singolo canale (⚙).
-Tolto lo slippage dalle impostazioni: gli ordini non vengono più rifiutati per lo slippage.
-Se un'operazione viene aperta a un prezzo peggiore del previsto arriva solo un avviso ⚠ in Attività.
+3.15
+Correzione importante: mentre un segnale aspetta il prezzo, gli altri messaggi dei canali vengono letti ed eseguiti subito
+(prima restavano in coda fino all'entrata). I messaggi arrivati prima dell'apertura non riguardano l'operazione.
+Radar: corretto lo stesso caso (i messaggi prima dell'entrata gonfiavano i risultati con l'attesa del prezzo).
+Radar: un «chiudete» prima dell'esecuzione cancella l'ordine pendente, come nella copia vera.

@@ -252,6 +252,7 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
         return b[5] * pt if len(b) > 5 and b[5] > 0 else spread
 
     t_exec = sig.t + EXEC_DELAY
+    waited = False          # entrata dopo un'attesa (prezzo o ordine pendente): i messaggi di prima non la riguardano
     # ---- entrata
     if sig.otype == "market":
         bid, i = price_at(bars, times, t_exec)
@@ -291,11 +292,14 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
                         sig.status = "ignorato: prezzo lontano da quello del segnale"
                     return
                 first_check, price, entry_t = found[0], found[1], bars[found[0]][0]
+                waited = True
         entry_p = price
     else:
         e = sig.entry
         expiry = s["pending_expiry_min"] * 60 if s["pending_expiry_min"] else None   # 0 = mai (come la copia)
-        cancels = sorted(t for t, k, _p in events if k == "cancel")
+        waited = True
+        # «cancella» o «chiudete» prima dell'esecuzione: l'ordine pendente viene cancellato (come la copia vera)
+        cancels = sorted(t for t, k, _p in events if k in ("cancel", "close"))
         found = None
         for j in range(bisect.bisect_left(times, sig.t), len(bars)):
             t, o, h, l_ = bars[j][:4]
@@ -434,6 +438,14 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
                 start = f
 
     ev = sorted(e for e in events if e[0] >= sig.t and e[1] != "cancel")
+    if waited:
+        # messaggi arrivati mentre l'operazione non era ancora aperta: non la riguardano
+        # (solo «nuovo SL» vale anche per l'ordine pendente, come nella copia vera)
+        for et, kind, prm in ev:
+            if et < entry_t and kind == "move_sl" and sig.otype != "market":
+                for sub in subs:
+                    sub["sl"] = prm
+        ev = [e for e in ev if e[0] >= entry_t]
     k = 0
     be_auto_done = False
     end_t = sig.t + HORIZON

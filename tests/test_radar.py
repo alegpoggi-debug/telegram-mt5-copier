@@ -151,6 +151,24 @@ def main():
     sig, *_ = run([(T0, "SELL GOLD NOW SL 2000 TP 1988", None)], S(min_sl_distance_pips=40, zone_wait_seconds=0), b)
     check(sig[0].status == "ignorato: troppo vicino allo Stop Loss", "SELL a 30 pips dallo SL: non entra", sig[0].status)
 
+    # messaggi del canale arrivati PRIMA dell'entrata (in attesa del prezzo): non toccano l'operazione
+    b = bars_from([2008.0] * 20 + ramp(2008, 2002, 6) + ramp(2002, 2012, 20) + [2012] * 20)
+    zs = S(zone_wait=True, zone_wait_seconds=3600, zone_margin_points=50, min_sl_distance_pips=0)
+    sig, msgs, st, _ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None), (T0 + 1, "chiudete metà", 1),
+                            (T0 + 2, "chiudete tutto", 1)], zs, b)
+    check(sig[0].entry_t and all(t >= sig[0].entry_t for t, _p in sig[0].exits) and sig[0].exit_reason == "TP"
+          and abs(sig[0].points - (2010 - sig[0].entry_p) / 0.01) < 1,
+          "messaggi prima dell'entrata ignorati: l'operazione arriva al TP intera",
+          (sig[0].entry_t, sig[0].exits, sig[0].exit_reason, sig[0].points))
+    # entrata immediata: i messaggi dello stesso istante valgono ancora (come prima)
+    b = bars_from([2002.0] * 20 + ramp(2002, 2012, 20) + [2012] * 20)
+    sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None), (T0 + 300, "chiudete metà", 1)], zs, b)
+    check(len(sig[0].exits) == 2, "dopo l'entrata il messaggio vale", sig[0].exits)
+    # ordine limit: «chiudete» prima dell'esecuzione lo cancella
+    b = bars_from([2005.0] * 15 + ramp(2005, 1999, 10) + ramp(1999, 2012, 20))
+    sig, *_ = run([(T0, "BUY LIMIT GOLD 2000 SL 1990 TP 2010", None), (T0 + 60, "chiudete", 1)], S(), b)
+    check(sig[0].status == "ordine mai eseguito", "limit cancellato da «chiudete» prima dell'esecuzione", sig[0].status)
+
     # un solo prezzo (BUY NOW 2002): aspetta che il prezzo torni vicino, come la copia vera
     b = bars_from([2008.0] * 10 + ramp(2008, 2002, 4) + ramp(2002, 2012, 20) + [2012] * 20)
     sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=600,

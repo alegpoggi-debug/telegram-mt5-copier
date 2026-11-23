@@ -730,6 +730,14 @@ class Engine:
         buy = order["side"] == "BUY"
         wait = max(0, int(s["zone_wait_seconds"]))
         deadline = time.monotonic() + wait
+        turn = {"released": False}         # di questo segnale: se ha lasciato passare gli altri messaggi
+        try:
+            return await self._gate_loop(r, order, s, zone, sl, spread_limit, two, buy, wait, deadline, turn)
+        finally:
+            if turn["released"]:
+                await self.lock.acquire()      # riprendo il turno prima di inviare l'ordine
+
+    async def _gate_loop(self, r, order, s, zone, sl, spread_limit, two, buy, wait, deadline, turn):
         told = False
         last_problem = "prezzo non disponibile"
         while True:
@@ -774,6 +782,10 @@ class Engine:
                 if not told and wait:
                     self.ui.on_log(f"  → {last_problem}: aspetto fino a {wait} secondi", "trade")
                     told = True
+                    # mentre aspetta, gli altri messaggi dei canali continuano a essere letti ed eseguiti
+                    if self.lock is not None and self.lock.locked() and not turn["released"]:
+                        self.lock.release()
+                        turn["released"] = True
             if time.monotonic() >= deadline:
                 return f"{last_problem}" + (f" anche dopo {wait} secondi: segnale lasciato perdere" if wait else "")
             await asyncio.sleep(0.5)
