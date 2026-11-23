@@ -578,6 +578,7 @@ class ChannelSettingsDialog(QDialog):
         cl.addWidget(_label("ENTRATA", "section"))
         self._switch(cl, "Aspetta il prezzo del segnale", None, "zone_wait", eff)
         self._spin(cl, "Tempo massimo di attesa", None, "zone_wait_seconds", 0, 3600, " secondi", eff)
+        self._spin(cl, "Distanza minima dallo Stop Loss", None, "min_sl_distance_pips", 0, 100000, " pips", eff)
         bl.addWidget(c)
 
         # gestione
@@ -1205,7 +1206,7 @@ class SettingsDialog(QDialog):
         self.slpts_wrap.setVisible(s["no_sl_mode"] == "default")
         lay.addWidget(c3)
 
-        # entrata: slippage, fascia di prezzo, spread
+        # entrata: prezzo del segnale, Stop Loss, spread
         c6, l6 = _card(spacing=14)
         l6.addWidget(_label("ENTRATA", "section"))
         self.sw_zone = Switch(s["zone_wait"])
@@ -1234,6 +1235,13 @@ class SettingsDialog(QDialog):
         l6.addWidget(self.zone_wrap)
         self.sw_zone.toggled.connect(self.zone_wrap.setVisible)
         self.zone_wrap.setVisible(s["zone_wait"])
+        self.sp_sl_min = QSpinBox()
+        self.sp_sl_min.setRange(0, 100000)
+        self.sp_sl_min.setSuffix(" pips")
+        self.sp_sl_min.setValue(s["min_sl_distance_pips"])
+        _clean_spin(self.sp_sl_min)
+        self._row(l6, "Distanza minima dallo Stop Loss", "Non entra se il prezzo è a questa distanza dallo SL o meno "
+                  "(o se l'ha già superato). Oro: 1 pip = 10 punti = 0,10 $. 0 = nessun controllo.", self.sp_sl_min)
         self.sp_spread = QSpinBox()
         self.sp_spread.setRange(0, 100000)
         self.sp_spread.setSuffix(" punti")
@@ -1241,13 +1249,6 @@ class SettingsDialog(QDialog):
         _clean_spin(self.sp_spread)
         self._row(l6, "Spread massimo", "Con lo spread più alto non entra (aspetta come sopra). 0 = nessun limite.",
                   self.sp_spread)
-        self.sp_slip = QSpinBox()
-        self.sp_slip.setRange(0, 100000)
-        self.sp_slip.setSuffix(" punti")
-        self.sp_slip.setValue(s["slippage_points"])
-        _clean_spin(self.sp_slip)
-        self._row(l6, "Slippage massimo", "Scostamento massimo accettato nel momento dell'esecuzione. Alcuni broker "
-                  "eseguono comunque al prezzo di mercato.", self.sp_slip)
         lay.addWidget(c6)
 
         # gestione
@@ -1361,9 +1362,9 @@ class SettingsDialog(QDialog):
             "duplicate_window_min": self.sp_dup.value(),
             "zone_wait": self.sw_zone.isChecked(),
             "zone_wait_seconds": self.sp_zone_sec.value(),
+            "min_sl_distance_pips": self.sp_sl_min.value(),
             "zone_margin_points": self.sp_zone_margin.value(),
             "max_spread_points": self.sp_spread.value(),
-            "slippage_points": self.sp_slip.value(),
         }
 
     # ------------------------------------------------------------ prova messaggio

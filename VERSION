@@ -1,3 +1,5 @@
-3.13
-«Aspetta il prezzo del segnale»: se il prezzo è già migliore di quello del segnale (BUY più basso, SELL più alto,
-ma non oltre lo Stop Loss) entra subito, anche fuori dal margine. Copia e Radar.
+3.14
+Nuova impostazione «Distanza minima dallo Stop Loss» (40 pips): non entra se il prezzo è a quella distanza dallo SL o meno,
+o se l'ha già superato. Vale per la copia e per il Radar, anche per singolo canale (⚙).
+Tolto lo slippage dalle impostazioni: gli ordini non vengono più rifiutati per lo slippage.
+Se un'operazione viene aperta a un prezzo peggiore del previsto arriva solo un avviso ⚠ in Attività.

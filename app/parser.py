@@ -235,6 +235,31 @@ def find_duplicate(fp, seen):
     return None
 
 
+def entry_window(buy, entry, entry2, sl, s, pt, zone=True):
+    """Prezzi a cui si può entrare a mercato: (minimo, massimo); None = nessun limite da quella parte.
+
+    - prezzo del segnale (se «Aspetta il prezzo del segnale» è acceso): dalla parte in cui si guadagna di meno
+      il prezzo deve stare entro il margine; dalla parte in cui si guadagna di più si entra subito;
+    - Stop Loss: mai oltre lo SL e mai a «distanza minima dallo SL» o meno (1 pip = 10 punti).
+    """
+    lo = hi = None
+    if zone and entry is not None:
+        a, b = sorted((entry, entry2 if entry2 is not None else entry))
+        m = s["zone_margin_points"] * pt
+        if buy:
+            hi = b + m
+        else:
+            lo = a - m
+    if sl is not None and sl > 0:
+        d = max(0, s.get("min_sl_distance_pips", 0)) * 10 * pt
+        # «a questa distanza o meno» non entra: il limite è escluso (mezzo punto oltre)
+        if buy:
+            lo = sl + d + pt / 2
+        else:
+            hi = sl - d - pt / 2
+    return lo, hi
+
+
 def describe(r: dict) -> str:
     k = r["kind"]
     if k == "signal":

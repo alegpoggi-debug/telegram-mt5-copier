@@ -140,7 +140,6 @@ def main():
     d.sp_zone_sec.setValue(20)
     d.sp_zone_margin.setValue(15)
     d.sp_spread.setValue(40)
-    d.sp_slip.setValue(25)
     check(not d.dup_wrap.isHidden(), "protezione doppi accesa di base")
     d.sp_dup.setValue(5)
     d.save()
@@ -156,7 +155,8 @@ def main():
           "pareggio del copiatore salvato")
     s2 = eng.settings.get()
     check((s2["zone_wait"], s2["zone_wait_seconds"], s2["zone_margin_points"], s2["max_spread_points"],
-           s2["slippage_points"]) == (True, 20, 15, 40, 25), "impostazioni ENTRATA salvate")
+           s2["slippage_points"]) == (True, 20, 15, 40, 30), "impostazioni ENTRATA salvate")
+    check(not hasattr(d, "sp_slip"), "slippage tolto dalle impostazioni")
     d = gui.SettingsDialog(win, eng, "Trading")
     s = eng.settings.get()
     exp = {"lot_mode": "fixed", "fixed_lot": 0.07, "risk_percent": 2.0, "risk_money": 25.0, "dry_run": True,

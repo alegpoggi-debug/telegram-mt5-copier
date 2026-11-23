@@ -137,6 +137,20 @@ def main():
     check(sig[0].status == "vinto" and abs(sig[0].entry_p - 2024) < 1e-6, "SELL più alto della fascia: entra subito",
           (sig[0].status, sig[0].entry_p))
 
+    # troppo vicino allo Stop Loss: non entra (copia e Radar uguali)
+    b = bars_from([2003.0] * 40 + ramp(2003, 2015, 20) + [2015] * 10)
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 2000 TP 2012", None)], S(min_sl_distance_pips=40, zone_wait_seconds=0), b)
+    check(sig[0].status == "ignorato: troppo vicino allo Stop Loss", "BUY a 30 pips dallo SL: non entra", sig[0].status)
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 2000 TP 2012", None)], S(min_sl_distance_pips=20, zone_wait_seconds=0), b)
+    check(sig[0].status == "vinto", "distanza minima 20 pips: entra", sig[0].status)
+    b = bars_from([2003.0] * 15 + ramp(2003, 2015, 20) + [2015] * 10)
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 2000 TP 2014", None)], S(min_sl_distance_pips=40, zone_wait_seconds=1800), b)
+    check(sig[0].status == "vinto" and abs(sig[0].entry_p - 2004) < 0.01,
+          "il prezzo si allontana dallo SL entro il tempo: entra a 40 pips", (sig[0].status, sig[0].entry_p))
+    b = bars_from([1997.0] * 40 + ramp(1997, 1985, 20) + [1985] * 10)
+    sig, *_ = run([(T0, "SELL GOLD NOW SL 2000 TP 1988", None)], S(min_sl_distance_pips=40, zone_wait_seconds=0), b)
+    check(sig[0].status == "ignorato: troppo vicino allo Stop Loss", "SELL a 30 pips dallo SL: non entra", sig[0].status)
+
     # un solo prezzo (BUY NOW 2002): aspetta che il prezzo torni vicino, come la copia vera
     b = bars_from([2008.0] * 10 + ramp(2008, 2002, 4) + ramp(2002, 2012, 20) + [2012] * 20)
     sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=600,

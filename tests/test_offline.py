@@ -456,7 +456,8 @@ async def main():
     n0 = len(ea.received)
     await reset(dry_run=True)
     await send(150, "BUY GOLD 2000 SL 1990 TP 2010")
-    check(len(ea.received) == n0, "modalità prova: nessun ordine inviato")
+    check(not [c for c in ea.received[n0:] if c["action"] in ("OPEN", "MODIFY", "CLOSE", "CANCEL")],
+          "modalità prova: nessun ordine inviato")
     check(any("[PROVA" in t for _, t in ui.logs[-3:]), "modalità prova: mostra cosa farebbe")
 
     # ---------------------------------------------------------- 24. parole chiave personalizzate + prova messaggio

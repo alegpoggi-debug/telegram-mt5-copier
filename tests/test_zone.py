@@ -1,4 +1,4 @@
-"""Test: attesa del prezzo nella fascia di entrata, spread massimo, slippage.
+"""Test: attesa del prezzo nella fascia di entrata, spread massimo, avviso di slippage.
 python -m tests.test_zone
 """
 import asyncio
@@ -36,6 +36,7 @@ class FakeEA:
         (self.dir / "symbols.txt").write_text("XAUUSD.m\r\nEURUSD.m\r\n")
         self.bid, self.ask = 2353.00, 2353.20
         self.received, self.positions = [], {}
+        self.fill_offset = 0.0
         self.next = 1000
 
     def write_state(self):
@@ -53,12 +54,14 @@ class FakeEA:
                 f.unlink()
                 kv["_t"] = time.monotonic()
                 self.received.append(kv)
-                if kv["action"] == "QUOTE":
+                if kv["action"] == "QUOTE" and kv.get("symbol", "").startswith("EURUSD"):
+                    res = {"ok": 1, "price": 1.08500, "msg": "ask:1.08502 point:0.00001000"}
+                elif kv["action"] == "QUOTE":
                     res = {"ok": 1, "price": self.bid, "msg": f"ask:{self.ask:.2f} point:0.01000000"}
                 elif kv["action"] == "OPEN":
                     t = self.next
                     self.next += 1
-                    price = self.ask if kv["side"] == "BUY" else self.bid
+                    price = round((self.ask if kv["side"] == "BUY" else self.bid) + self.fill_offset, 2)
                     self.positions[t] = dict(symbol=kv["symbol"], side=kv["side"], volume=float(kv["volume"]),
                                              price=price, magic=int(kv["magic"]), comment=kv["comment"])
                     res = {"ok": 1, "ticket": t, "retcode": 10009, "msg": "done", "price": price, "volume": kv["volume"]}
@@ -196,6 +199,51 @@ async def main():
                                 zone_margin_points=300)
     check(len(opens) == 1 and el < 1.5, "un solo prezzo, BUY più basso: entra subito", el)
 
+    # G3) troppo vicino allo Stop Loss (40 pips = 4 $ sull'oro): non entra
+    ea.bid, ea.ask = 2402.80, 2403.00          # BUY, SL 2400: a 30 pips dallo SL
+    opens, el, logs = await signal("BUY GOLD NOW SL 2400 TP 2420", zone_wait=False, zone_wait_seconds=2,
+                                   min_sl_distance_pips=40)
+    check(not opens and any("a 30 pips dallo Stop Loss (minimo 40)" in x for x in logs),
+          "BUY a 30 pips dallo SL: non entra", logs)
+    ea.bid, ea.ask = 2404.80, 2405.00          # a 50 pips
+    opens, el, _ = await signal("BUY GOLD NOW SL 2400 TP 2420", zone_wait=False, min_sl_distance_pips=40)
+    check(len(opens) == 1 and el < 1.5, "BUY a 50 pips dallo SL: entra", el)
+    ea.bid, ea.ask = 2403.80, 2404.00          # esattamente 40 pips: «o meno» → non entra
+    opens, el, _ = await signal("BUY GOLD NOW SL 2400 TP 2420", zone_wait=False, zone_wait_seconds=1,
+                                min_sl_distance_pips=40)
+    check(not opens, "BUY a 40 pips esatti dallo SL: non entra")
+    ea.bid, ea.ask = 2417.00, 2417.20          # SELL, SL 2420: a 30 pips
+    opens, el, _ = await signal("SELL GOLD NOW SL 2420 TP 2400", zone_wait=False, zone_wait_seconds=1,
+                                min_sl_distance_pips=40)
+    check(not opens, "SELL a 30 pips dallo SL: non entra")
+    opens, el, _ = await signal("SELL GOLD NOW SL 2420 TP 2400", zone_wait=False, min_sl_distance_pips=0)
+    check(len(opens) == 1, "distanza 0 = nessun controllo: entra")
+    ea.bid, ea.ask = 2402.80, 2403.00
+
+    async def away():
+        await asyncio.sleep(1)
+        ea.bid, ea.ask = 2405.80, 2406.00
+    asyncio.create_task(away())
+    opens, el, logs = await signal("BUY GOLD NOW SL 2400 TP 2420", zone_wait=False, zone_wait_seconds=6,
+                                   min_sl_distance_pips=40)
+    check(len(opens) == 1 and 0.8 < el < 3.5, "il prezzo si allontana dallo SL entro il tempo: entra", (el, logs))
+    ea.bid, ea.ask = 2402.80, 2403.00          # prezzo migliore della fascia ma troppo vicino allo SL
+    opens, el, _ = await signal("BUY GOLD 2410-2412 SL 2400 TP 2425", zone_wait=True, zone_wait_seconds=1,
+                                zone_margin_points=300, min_sl_distance_pips=40)
+    check(not opens, "prezzo migliore ma vicino allo SL: non entra")
+
+    # G4) prezzo non disponibile e solo il controllo dello SL: entra lo stesso (non si perde il segnale)
+    real_quote = eng._quote
+
+    async def no_quote(_sym):
+        return None
+    eng._quote = no_quote
+    opens, el, logs = await signal("BUY GOLD NOW SL 2400 TP 2420", zone_wait=False, zone_wait_seconds=5,
+                                   min_sl_distance_pips=40)
+    check(len(opens) == 1 and el < 1.5 and any("non controllata" in x for x in logs),
+          "prezzo non disponibile: entra e lo scrive", (el, logs))
+    eng._quote = real_quote
+
     # H) segnale con un solo prezzo (BUY NOW 2348): aspetta che il prezzo sia vicino a quello del segnale
     ea.bid, ea.ask = 2353.00, 2353.20
     opens, el, logs = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2,
@@ -230,9 +278,20 @@ async def main():
     opens, el, _ = await signal("BUY GOLD 2345-2350 SL 2340 TP 2355 TP 2360 TP 2370", zone_wait=True)
     check(len(opens) == 3, "più TP: apre tutte le posizioni", len(opens))
 
-    # J) slippage massimo inviato a MetaTrader
-    opens, el, _ = await signal(BUY, slippage_points=55)
-    check(opens and opens[0]["deviation"] == "55", "slippage massimo passato a MetaTrader", opens[0].get("deviation"))
+    # J) slippage: nessun limite (l'ordine non viene mai rifiutato), solo un avviso se l'esecuzione è peggiore
+    ea.bid, ea.ask = 2347.80, 2348.00
+    opens, el, logs = await signal(BUY)
+    check(opens and opens[0]["deviation"] == "100000" and not any("slippage" in x for x in logs),
+          "nessun limite di slippage, nessun avviso se il prezzo è quello previsto", (opens[0].get("deviation"), logs))
+    ea.fill_offset = 0.60                      # il broker esegue 60 punti più in alto
+    opens, el, logs = await signal(BUY)
+    ea.fill_offset = 0.0
+    check(len(opens) == 1 and any("60 punti peggio del previsto" in x and "resta aperta" in x for x in logs),
+          "avviso di slippage, operazione aperta lo stesso", logs)
+    ea.fill_offset = -0.60                     # eseguito a un prezzo migliore: nessun avviso
+    opens, el, logs = await signal(BUY)
+    ea.fill_offset = 0.0
+    check(len(opens) == 1 and not any("slippage" in x for x in logs), "prezzo migliore: nessun avviso", logs)
 
     # K) modalità prova: aspetta ma non invia ordini
     ea.bid, ea.ask = 2353.00, 2353.20

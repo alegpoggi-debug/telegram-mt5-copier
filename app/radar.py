@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import DATA_DIR
-from .parser import describe, find_duplicate, fingerprint, parse_message
+from .parser import describe, entry_window, find_duplicate, fingerprint, parse_message
 
 HORIZON = 60 * 86400         # un segnale viene seguito fino alla chiusura (al massimo 60 giorni)
 RADAR_DIR = DATA_DIR / "radar"
@@ -265,26 +265,30 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             entry_t = t_exec
         first_check = i + 1
         price = bid + sp(i) if buy else bid
-        if s["zone_wait"] and sig.entry is not None and not s["reverse"]:
-            # fascia del segnale, oppure il suo unico prezzo (come la copia vera)
-            lo, hi = sorted((sig.entry, sig.entry2 if sig.entry2 is not None else sig.entry))
-            m = s["zone_margin_points"] * pt
-            # prezzo migliore di quello del segnale (BUY più basso, SELL più alto), ma non oltre lo SL: entra subito
-            better = ((buy and price < lo and (sig.sl is None or price > sig.sl)) or
-                      (not buy and price > hi and (sig.sl is None or price < sig.sl)))
-            if not better and not (lo - m <= price <= hi + m):
+        if not s["reverse"]:
+            # prezzi accettati (come la copia vera): margine dal prezzo del segnale dalla parte sfavorevole,
+            # subito dalla parte favorevole, mai oltre lo SL né troppo vicino allo SL
+            zone = s["zone_wait"] and sig.entry is not None
+            wlo, whi = entry_window(buy, sig.entry, sig.entry2, sig.sl, s, pt, zone=zone)
+            if (wlo is not None and price < wlo) or (whi is not None and price > whi):
                 deadline = sig.t + max(0, s["zone_wait_seconds"])
                 found = None
                 for j in range(i + 1, len(bars)):
                     if bars[j][0] > deadline:
                         break
                     add = sp(j) if buy else 0.0
-                    if bars[j][2] + add >= lo - m and bars[j][3] + add <= hi + m:
-                        found = (j, hi + m if price > hi + m else lo - m)
+                    if (whi is None or bars[j][3] + add <= whi) and (wlo is None or bars[j][2] + add >= wlo):
+                        found = (j, whi if whi is not None and price > whi else wlo)
                         break
                 if not found:
-                    sig.status = ("ignorato: prezzo fuori dalla fascia" if sig.entry2 is not None else
-                                  "ignorato: prezzo lontano da quello del segnale")
+                    near_sl = sig.sl and ((buy and wlo is not None and price < wlo) or
+                                          (not buy and whi is not None and price > whi))
+                    if near_sl:
+                        sig.status = "ignorato: troppo vicino allo Stop Loss"
+                    elif sig.entry2 is not None:
+                        sig.status = "ignorato: prezzo fuori dalla fascia"
+                    else:
+                        sig.status = "ignorato: prezzo lontano da quello del segnale"
                     return
                 first_check, price, entry_t = found[0], found[1], bars[found[0]][0]
         entry_p = price
@@ -721,7 +725,8 @@ SIM_KEYS = ["multi_tp_mode", "tp_index", "lot_split", "no_sl_mode", "default_sl_
             "order_type_mode", "pending_expiry_min", "ignore_duplicates", "duplicate_window_min",
             "follow_breakeven", "follow_move_sl", "follow_close", "follow_partial", "follow_cancel",
             "partial_percent", "be_on_tp1", "be_after_points", "be_offset_points", "tp_hit_action",
-            "tp_hit_partial_percent", "zone_wait", "zone_wait_seconds", "zone_margin_points", "updates_target",
+            "tp_hit_partial_percent", "zone_wait", "zone_wait_seconds", "zone_margin_points", "min_sl_distance_pips",
+            "updates_target",
             "max_open_trades", "max_trades_per_symbol", "hours_enabled", "hours_start", "hours_end", "days",
             "blocked_symbols", "allowed_symbols", "symbol_aliases"]
 

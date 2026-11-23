@@ -44,6 +44,7 @@ async def main():
     eng.loop = asyncio.get_running_loop()
     eng.lock = asyncio.Lock()
     eng.settings.update({"mt5_dir": str(common), "dry_run": False, "max_open_trades": 99, "days": list(range(7)),
+                         "min_sl_distance_pips": 0,   # qui si provano i doppi (il finto MetaTrader dà l'oro per tutto)
                          "max_trades_per_symbol": 99, "max_total_lots": 99})
     eng.setup_bridge()
     eng.channels = {-1: "Canale A", -2: "Canale B"}

@@ -13,11 +13,15 @@ from pathlib import Path
 
 from .bridge import Bridge, BridgeError, find_common_files_dir
 from .config import DATA_DIR
-from .parser import describe, find_duplicate, fingerprint, parse_message
+from .parser import describe, entry_window, find_duplicate, fingerprint, parse_message
 from .settings import SettingsStore, for_channel, split_words
 
 log = logging.getLogger("engine")
 
+
+# nessun limite di scostamento all'esecuzione: l'ordine non viene mai rifiutato per lo slippage
+# (se succede, arriva solo un avviso in Attività)
+NO_SLIPPAGE_LIMIT = 100000
 
 class SignalDB:
     """Ricorda da quale messaggio Telegram nasce ogni operazione."""
@@ -631,7 +635,7 @@ class Engine:
                 "sl_adj": s["sl_adjust_points"], "tp_adj": s["tp_adjust_points"],
                 "max_dist": s["max_entry_distance_points"] if otype == "market" else 0,
                 "expiry_min": s["pending_expiry_min"] if otype != "market" else 0,
-                "magic": s["magic"], "deviation": s["slippage_points"],
+                "magic": s["magic"], "deviation": NO_SLIPPAGE_LIMIT,
             })
         if s["lot_mode"] == "risk_percent" and not s["dry_run"] and not acc.get("balance"):
             return [], "saldo non disponibile per calcolare il rischio"
@@ -648,6 +652,12 @@ class Engine:
         if why:
             return [f"NON eseguito: {why}"]
         out = []
+        # prezzo un attimo prima dell'invio: serve solo per avvisare se l'esecuzione è peggiore (non annulla nulla)
+        expected = None
+        if not s["dry_run"] and orders and orders[0]["otype"] == "MARKET":
+            q = await self._quote(orders[0]["symbol"])
+            if q:
+                expected = (q[1] if orders[0]["side"] == "BUY" else q[0], q[2])
         for o in orders:
             o["comment"] = f"TG#{key}" if key else "TG#manuale"
             desc = _desc(o)
@@ -664,9 +674,25 @@ class Engine:
                 if key:
                     self.db.add_ticket(key, t)
                 out.append(f"APERTO {desc} → ticket {t}, lotti {res.get('volume')}, prezzo {res.get('price')}")
+                self._slippage_alert(o, expected, res.get("price"), s)
             else:
                 out.append(f"RIFIUTATO {desc}: {res.get('msg')} (codice {res.get('retcode')})")
         return out
+
+    def _slippage_alert(self, order, expected, filled, s):
+        """Avviso (solo notifica) se l'operazione è stata aperta a un prezzo peggiore di quello di un attimo prima."""
+        try:
+            fill = float(filled or 0)
+        except ValueError:
+            return
+        if not expected or not fill or not expected[1]:
+            return
+        price, pt = expected
+        worse = (fill - price) if order["side"] == "BUY" else (price - fill)
+        pts = round(worse / pt)
+        if pts > max(0, int(s["slippage_points"])):
+            self.ui.on_log(f"⚠ ATTENZIONE: {order['side']} {order['symbol']} aperto a {fill:g} invece di circa "
+                           f"{price:g}: {pts} punti peggio del previsto (slippage). L'operazione resta aperta.", "warn")
 
     async def _quote(self, symbol):
         """Prezzo attuale da MetaTrader: (bid, ask, point) oppure None."""
@@ -682,20 +708,25 @@ class Engine:
         return float(res.get("price") or 0), float(m.group(1)), float(m.group(2))
 
     async def _entry_gate(self, r, order, s) -> str | None:
-        """Prezzo del segnale e spread. None = si può entrare, altrimenti il motivo per non entrare.
+        """Prezzo del segnale, Stop Loss e spread. None = si può entrare, altrimenti il motivo per non entrare.
 
-        Se il prezzo è fuori dalla fascia del segnale, o lontano dal suo prezzo se ne indica uno solo
-        (o lo spread è troppo alto), aspetta fino al tempo scelto controllando ogni mezzo secondo;
-        se non ci arriva, il segnale viene lasciato perdere.
+        - «Aspetta il prezzo del segnale»: dalla parte in cui si guadagna di meno il prezzo deve essere entro il
+          margine dalla fascia (o dal prezzo) del segnale; dalla parte in cui si guadagna di più si entra subito;
+        - mai oltre lo Stop Loss, e mai a «distanza minima dallo SL» o meno;
+        - spread massimo.
+        Se qualcosa non va aspetta fino al tempo scelto, controllando ogni mezzo secondo; poi lascia perdere.
         """
-        zone = s["zone_wait"] and r.get("entry") is not None and not s["reverse"]
+        if order["otype"] != "MARKET" or s["reverse"]:
+            zone = sl = None
+        else:
+            zone = s["zone_wait"] and r.get("entry") is not None
+            sl = r.get("sl")
         spread_limit = s["max_spread_points"]
-        if order["otype"] != "MARKET" or not (zone or spread_limit):
+        if order["otype"] != "MARKET" or not (zone or sl or spread_limit):
             return None
         if self.bridge is None or not self.mt5_connected():
             return None if s["dry_run"] else "MetaTrader non collegato"
         two = r.get("entry2") is not None
-        lo, hi = (sorted((r["entry"], r["entry2"] if two else r["entry"])) if zone else (None, None))
         buy = order["side"] == "BUY"
         wait = max(0, int(s["zone_wait_seconds"]))
         deadline = time.monotonic() + wait
@@ -703,26 +734,41 @@ class Engine:
         last_problem = "prezzo non disponibile"
         while True:
             q = await self._quote(order["symbol"])
+            if not q and not (zone or spread_limit):
+                # solo il controllo dello SL e il prezzo non si legge: entra come prima, non perdo il segnale
+                self.ui.on_log("  → prezzo non disponibile: distanza dallo Stop Loss non controllata", "warn")
+                return None
             if q:
                 bid, ask, pt = q
                 price = ask if buy else bid
-                margin = s["zone_margin_points"] * pt
+                lo, hi = entry_window(buy, r.get("entry"), r.get("entry2"), sl, s, pt, zone=bool(zone))
                 problems = []
-                # prezzo migliore di quello del segnale (BUY più basso, SELL più alto), ma non oltre lo SL: si entra subito
-                sl = r.get("sl")
-                better = zone and ((buy and price < lo and (sl is None or price > sl)) or
-                                   (not buy and price > hi and (sl is None or price < sl)))
-                if zone and not better and not (lo - margin <= price <= hi + margin):
-                    problems.append(f"prezzo {price:g} fuori dalla fascia {lo:g}–{hi:g}" if two else
-                                    f"prezzo {price:g} lontano da quello del segnale ({lo:g})")
+                if lo is not None and price < lo or hi is not None and price > hi:
+                    near_sl = sl and ((buy and lo is not None and price < lo) or (not buy and hi is not None and price > hi))
+                    if near_sl:
+                        dist = (price - sl) / (10 * pt) if buy else (sl - price) / (10 * pt)
+                        problems.append(f"prezzo {price:g} oltre lo Stop Loss {sl:g}" if dist <= 0 else
+                                        f"prezzo {price:g} a {dist:.0f} pips dallo Stop Loss "
+                                        f"(minimo {s['min_sl_distance_pips']})")
+                    elif two:
+                        e1, e2 = sorted((r["entry"], r["entry2"]))
+                        problems.append(f"prezzo {price:g} fuori dalla fascia {e1:g}–{e2:g}")
+                    else:
+                        problems.append(f"prezzo {price:g} lontano da quello del segnale ({r['entry']:g})")
                 if spread_limit and pt and (ask - bid) > spread_limit * pt + pt / 2:
                     problems.append(f"spread {round((ask - bid) / pt)} punti (massimo {spread_limit})")
                 if not problems:
-                    if better and not (lo - margin <= price <= hi + margin):
-                        self.ui.on_log(f"  → prezzo {price:g} migliore di quello del segnale: entro subito", "trade")
+                    if zone:
+                        a, b = sorted((r["entry"], r["entry2"] if two else r["entry"]))
+                        better = (buy and price < a) or (not buy and price > b)
+                        margin = s["zone_margin_points"] * pt
+                        if better and not (a - margin <= price <= b + margin):
+                            self.ui.on_log(f"  → prezzo {price:g} migliore di quello del segnale: entro subito", "trade")
+                        elif told:
+                            self.ui.on_log(f"  → prezzo {price:g} " + ("nella fascia" if two else
+                                                                       "vicino a quello del segnale") + ": entro", "trade")
                     elif told:
-                        self.ui.on_log(f"  → prezzo {price:g} " + ("nella fascia" if two else "vicino a quello del segnale")
-                                       + ": entro", "trade")
+                        self.ui.on_log(f"  → prezzo {price:g}: entro", "trade")
                     return None
                 last_problem = " e ".join(problems)
                 if not told and wait:
@@ -800,7 +846,7 @@ class Engine:
                 continue
             vol = 0 if percent >= 100 else round(p["volume"] * percent / 100, 4)
             out.append(await self._send({"action": "CLOSE", "ticket": t, "volume": vol,
-                                         "deviation": self.settings["slippage_points"]},
+                                         "deviation": NO_SLIPPAGE_LIMIT},
                                         f"chiusura {percent:g}% {p['symbol']} #{t}"))
         return out or ["nessuna posizione"]
 
