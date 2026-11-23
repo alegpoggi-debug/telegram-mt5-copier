@@ -253,11 +253,15 @@ def main():
                             (T0 + 60, "BUY LIMIT GOLD 2001 SL 1990 TP 2010 TP 2020 TP 2030", None),
                             (T0 + 70, "BUY GOLD 1996 SL 1990 TP 2010 TP 2020", None),
                             (T0 + 80, "BUY GOLD 2000 SL 1985 TP 2010", None),
-                            (T0 + 100, "SELL GOLD 2000 SL 2010 TP 1990", None)], S(), b)
-    check(st["duplicates"] == 4 and [m.note for m in msgs] == ["segnale", "doppio: ignorato", "doppio: ignorato",
-                                                               "doppio: ignorato", "doppio: ignorato", "segnale",
+                            (T0 + 100, "SELL GOLD 2000 SL 2010 TP 1990", None),
+                            (T0 + 120, "SELL GOLD 2004 SL 2014 TP 1995", None),
+                            (T0 + 20 * 60, "BUY GOLD 2000 SL 1985 TP 2010", None)], S(), b)
+    check(st["duplicates"] == 6 and [m.note for m in msgs] == ["segnale", "doppio: ignorato", "doppio: ignorato",
+                                                               "doppio: ignorato", "doppio: ignorato",
+                                                               "doppio: ignorato", "segnale", "doppio: ignorato",
                                                                "segnale"],
-          "segnale riscritto e seconda entrata: doppio; SL o direzione diversi: nuovo", [m.note for m in msgs])
+          "stessa direzione entro i minuti: un solo segnale; direzione opposta o dopo i minuti: nuovo",
+          [m.note for m in msgs])
 
     # 26) dentro lo stesso minuto: candela ribassista (massimo prima del minimo) → prima il TP
     b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.5, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 120)

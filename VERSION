@@ -1,3 +1,3 @@
-3.10
-Messaggi doppi: una seconda entrata a un prezzo diverso ma con gli stessi SL e TP, entro i minuti dei doppi, ora è ignorata (copia e Radar).
-Se cambiano anche lo SL o un TP resta un segnale nuovo.
+3.11
+Messaggi doppi: entro i minuti dei doppi, lo stesso simbolo nella stessa direzione vale come un solo segnale
+(anche se entrata, SL o TP cambiano). Direzione opposta, altro simbolo o dopo i minuti: segnale nuovo.
