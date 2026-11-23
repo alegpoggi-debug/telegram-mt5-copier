@@ -1211,7 +1211,8 @@ class SettingsDialog(QDialog):
         self.sw_zone = Switch(s["zone_wait"])
         self._row(l6, "Aspetta il prezzo del segnale", "Se il prezzo attuale è fuori dalla fascia del segnale (es. "
                   "2345–2350) o lontano dal suo prezzo (es. BUY NOW 2345), aspetta che ci arrivi. Se non arriva in "
-                  "tempo, il segnale viene ignorato. Vale anche per il Radar.", self.sw_zone)
+                  "tempo, il segnale viene ignorato. Se il prezzo è già migliore (BUY più basso, SELL più alto, "
+                  "ma non oltre lo SL) entra subito. Vale anche per il Radar.", self.sw_zone)
         self.sp_zone_sec = QSpinBox()
         self.sp_zone_sec.setRange(0, 3600)
         self.sp_zone_sec.setSuffix(" secondi")

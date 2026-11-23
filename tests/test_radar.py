@@ -122,6 +122,21 @@ def main():
     b = bars_from([2004.0] * 40 + ramp(2004, 2012, 20))
     sig, *_ = run([(T0, "BUY GOLD 2000-2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=60), b)
     check(sig[0].status.startswith("ignorato") and "fascia" in sig[0].status, "non rientra: segnale ignorato", sig[0].status)
+    # prezzo già migliore del segnale: entra subito (BUY più basso / SELL più alto), mai oltre lo SL
+    b = bars_from([1996.0] * 40 + ramp(1996, 2015, 20) + [2015] * 10)
+    zs = S(zone_wait=True, zone_wait_seconds=60, zone_margin_points=300)
+    sig, *_ = run([(T0, "BUY GOLD 2010-2012 SL 1990 TP 2014", None)], zs, b)
+    check(sig[0].status == "vinto" and abs(sig[0].entry_p - 1996) < 1e-6, "BUY più basso della fascia: entra subito",
+          (sig[0].status, sig[0].entry_p))
+    sig, *_ = run([(T0, "SELL GOLD 2010-2012 SL 2030 TP 1990", None)], zs, b)
+    check(sig[0].status.startswith("ignorato"), "SELL più basso della fascia: aspetta e salta", sig[0].status)
+    sig, *_ = run([(T0, "BUY GOLD 2010-2012 SL 1998 TP 2014", None)], zs, b)
+    check(sig[0].status.startswith("ignorato"), "BUY oltre lo SL: non entra", sig[0].status)
+    b = bars_from([2024.0] * 40 + ramp(2024, 2000, 20) + [2000] * 10)
+    sig, *_ = run([(T0, "SELL GOLD 2010-2012 SL 2030 TP 2005", None)], zs, b)
+    check(sig[0].status == "vinto" and abs(sig[0].entry_p - 2024) < 1e-6, "SELL più alto della fascia: entra subito",
+          (sig[0].status, sig[0].entry_p))
+
     # un solo prezzo (BUY NOW 2002): aspetta che il prezzo torni vicino, come la copia vera
     b = bars_from([2008.0] * 10 + ramp(2008, 2002, 4) + ramp(2002, 2012, 20) + [2012] * 20)
     sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=600,

@@ -174,6 +174,28 @@ async def main():
     opens, el, logs = await signal(BUY, zone_wait=False, max_spread_points=30, zone_wait_seconds=0)
     check(not opens and el < 1.5, "solo spread massimo (senza fascia): controllato anche da solo", logs)
 
+    # G2) prezzo già migliore di quello del segnale: entra subito (sempre attivo)
+    BUY2 = "BUY GOLD 2410-2412 SL 2395 TP 2425"
+    SELL2 = "SELL GOLD 2410-2412 SL 2425 TP 2395"
+    ea.bid, ea.ask = 2405.80, 2406.00          # 400 punti sotto la fascia
+    opens, el, logs = await signal(BUY2, zone_wait=True, zone_wait_seconds=3, zone_margin_points=300)
+    check(len(opens) == 1 and el < 1.5 and any("migliore di quello del segnale" in x for x in logs),
+          "BUY con prezzo più basso della fascia: entra subito", (el, logs))
+    opens, el, logs = await signal(SELL2, zone_wait=True, zone_wait_seconds=2, zone_margin_points=300)
+    check(not opens and el > 1.8, "SELL con prezzo più basso (guadagno minore): aspetta e non entra", el)
+    ea.bid, ea.ask = 2416.00, 2416.20          # 400 punti sopra la fascia
+    opens, el, _ = await signal(SELL2, zone_wait=True, zone_wait_seconds=3, zone_margin_points=300)
+    check(len(opens) == 1 and el < 1.5, "SELL con prezzo più alto della fascia: entra subito", el)
+    opens, el, _ = await signal(BUY2, zone_wait=True, zone_wait_seconds=2, zone_margin_points=300)
+    check(not opens and el > 1.8, "BUY con prezzo più alto (guadagno minore): aspetta e non entra", el)
+    ea.bid, ea.ask = 2393.80, 2394.00          # BUY: prezzo già sotto lo SL (2395)
+    opens, el, _ = await signal(BUY2, zone_wait=True, zone_wait_seconds=2, zone_margin_points=300)
+    check(not opens, "prezzo oltre lo Stop Loss: non entra")
+    ea.bid, ea.ask = 2405.80, 2406.00
+    opens, el, _ = await signal("BUY GOLD NOW 2412 SL 2395 TP 2425", zone_wait=True, zone_wait_seconds=3,
+                                zone_margin_points=300)
+    check(len(opens) == 1 and el < 1.5, "un solo prezzo, BUY più basso: entra subito", el)
+
     # H) segnale con un solo prezzo (BUY NOW 2348): aspetta che il prezzo sia vicino a quello del segnale
     ea.bid, ea.ask = 2353.00, 2353.20
     opens, el, logs = await signal("BUY GOLD NOW 2348 SL 2340 TP 2360", zone_wait=True, zone_wait_seconds=2,

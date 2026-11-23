@@ -269,7 +269,10 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             # fascia del segnale, oppure il suo unico prezzo (come la copia vera)
             lo, hi = sorted((sig.entry, sig.entry2 if sig.entry2 is not None else sig.entry))
             m = s["zone_margin_points"] * pt
-            if not (lo - m <= price <= hi + m):
+            # prezzo migliore di quello del segnale (BUY più basso, SELL più alto), ma non oltre lo SL: entra subito
+            better = ((buy and price < lo and (sig.sl is None or price > sig.sl)) or
+                      (not buy and price > hi and (sig.sl is None or price < sig.sl)))
+            if not better and not (lo - m <= price <= hi + m):
                 deadline = sig.t + max(0, s["zone_wait_seconds"])
                 found = None
                 for j in range(i + 1, len(bars)):

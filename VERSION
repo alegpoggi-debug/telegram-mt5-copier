@@ -1,4 +1,3 @@
-3.12
-Messaggi doppi: è doppio solo un segnale con gli stessi valori (entrata, SL e TP), anche se scritto in modo diverso.
-Segnali diversi arrivati nello stesso momento ora contano entrambi.
-«Aspetta il prezzo del segnale» vale anche per i segnali con un solo prezzo (es. BUY NOW 2345): copia e Radar entrano solo quando il prezzo è vicino a quello del messaggio.
+3.13
+«Aspetta il prezzo del segnale»: se il prezzo è già migliore di quello del segnale (BUY più basso, SELL più alto,
+ma non oltre lo Stop Loss) entra subito, anche fuori dal margine. Copia e Radar.

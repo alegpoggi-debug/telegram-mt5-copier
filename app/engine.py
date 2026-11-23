@@ -708,13 +708,19 @@ class Engine:
                 price = ask if buy else bid
                 margin = s["zone_margin_points"] * pt
                 problems = []
-                if zone and not (lo - margin <= price <= hi + margin):
+                # prezzo migliore di quello del segnale (BUY più basso, SELL più alto), ma non oltre lo SL: si entra subito
+                sl = r.get("sl")
+                better = zone and ((buy and price < lo and (sl is None or price > sl)) or
+                                   (not buy and price > hi and (sl is None or price < sl)))
+                if zone and not better and not (lo - margin <= price <= hi + margin):
                     problems.append(f"prezzo {price:g} fuori dalla fascia {lo:g}–{hi:g}" if two else
                                     f"prezzo {price:g} lontano da quello del segnale ({lo:g})")
                 if spread_limit and pt and (ask - bid) > spread_limit * pt + pt / 2:
                     problems.append(f"spread {round((ask - bid) / pt)} punti (massimo {spread_limit})")
                 if not problems:
-                    if told:
+                    if better and not (lo - margin <= price <= hi + margin):
+                        self.ui.on_log(f"  → prezzo {price:g} migliore di quello del segnale: entro subito", "trade")
+                    elif told:
                         self.ui.on_log(f"  → prezzo {price:g} " + ("nella fascia" if two else "vicino a quello del segnale")
                                        + ": entro", "trade")
                     return None
