@@ -246,6 +246,16 @@ def main():
     sig, msgs, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None), (T0 + 11 * 60, "BUY GOLD 2000 SL 1990 TP 2010", None)],
                            S(), b)
     check(len(sig) == 2 and st["duplicates"] == 0, "oltre la finestra di 10 minuti: segnale nuovo")
+    # stesso segnale riscritto: doppio anche nel Radar (come nella copia vera)
+    sig, msgs, st, _ = run([(T0, "BUY GOLD 2000-2003 SL 1990 TP 2010 TP 2020", None),
+                            (T0 + 20, "BUY GOLD 2003-2000 SL 1990 TP 2020 TP 2010", None),
+                            (T0 + 40, "Gold buy now\nSL 1990\nTP 2010", None),
+                            (T0 + 60, "BUY LIMIT GOLD 2001 SL 1990 TP 2010 TP 2020 TP 2030", None),
+                            (T0 + 80, "BUY GOLD 2000 SL 1985 TP 2010", None),
+                            (T0 + 100, "SELL GOLD 2000 SL 2010 TP 1990", None)], S(), b)
+    check(st["duplicates"] == 3 and [m.note for m in msgs] == ["segnale", "doppio: ignorato", "doppio: ignorato",
+                                                               "doppio: ignorato", "segnale", "segnale"],
+          "segnale riscritto: doppio; SL o direzione diversi: nuovo", [m.note for m in msgs])
 
     # 26) dentro lo stesso minuto: candela ribassista (massimo prima del minimo) → prima il TP
     b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.5, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 120)

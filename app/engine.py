@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .bridge import Bridge, BridgeError, find_common_files_dir
 from .config import DATA_DIR
-from .parser import describe, fingerprint, parse_message
+from .parser import describe, find_duplicate, fingerprint, parse_message
 from .settings import SettingsStore, for_channel, split_words
 
 log = logging.getLogger("engine")
@@ -426,8 +426,9 @@ class Engine:
         now = time.time()
         window = max(1, int(s["duplicate_window_min"])) * 60
         self._seen = {k: t for k, t in self._seen.items() if now - t < window}
-        if fp in self._seen:
-            when = dt.datetime.fromtimestamp(self._seen[fp]).strftime("%H:%M:%S")
+        same = find_duplicate(fp, self._seen)
+        if same is not None:
+            when = dt.datetime.fromtimestamp(self._seen[same]).strftime("%H:%M:%S")
             what = "segnale" if fp[0] == "signal" else "messaggio"
             return f"{what} doppio ignorato (uguale a quello delle {when})"
         self._seen[fp] = now

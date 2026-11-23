@@ -73,6 +73,24 @@ async def main():
     a, _, _ = await msg("SELL GOLD 2345-2350 SL 2355 TP 2330")
     check(len(a) == 1, "direzione diversa: è un segnale nuovo")
 
+    # stesso segnale riscritto in modo diverso: è sempre un doppio
+    for text, why in (("BUY GOLD 2350-2345 SL 2340 TP 2360", "fascia scritta al contrario"),
+                      ("BUY GOLD 2348 SL 2340 TP 2360", "prezzo dentro la fascia"),
+                      ("BUY GOLD NOW SL 2340 TP 2360", "senza prezzo (NOW)"),
+                      ("BUY LIMIT GOLD 2345 SL 2340 TP 2360", "LIMIT invece che a mercato"),
+                      ("BUY GOLD 2345-2350 SL 2340 TP 2360 TP 2370", "con un TP in più"),
+                      ("📢 SEGNALE\nGold buy 2345/2350\nSL: 2340\nTP1: 2360\nBuona fortuna!", "con testo in più")):
+        a, logs, _ = await msg(text)
+        check(not a and any("doppio ignorato" in x for x in logs), f"riscritto ({why}): ignorato", (text, logs))
+    a, _, _ = await msg("BUY GOLD 2346 SL 2339 TP 2361 TP 2356", cid=-2)
+    b, _, _ = await msg("BUY GOLD 2346 SL 2339 TP 2356 TP 2361", cid=-2)
+    check(len(a) == 2 and not b, "TP in ordine diverso: ignorato", (len(a), len(b)))
+    # ma un segnale davvero diverso resta nuovo
+    a, _, _ = await msg("BUY GOLD 2352-2355 SL 2340 TP 2360")
+    check(len(a) == 1, "entrata diversa (fasce che non si toccano): segnale nuovo")
+    a, _, _ = await msg("BUY GOLD 2345-2350 SL 2340 TP 2365")
+    check(len(a) == 1, "TP diverso: segnale nuovo")
+
     # gestione: "chiudete metà" ripetuto non chiude due volte
     await asyncio.sleep(0.2)
     a, _, _ = await msg("chiudete metà", reply=first)

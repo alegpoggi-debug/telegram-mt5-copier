@@ -329,13 +329,16 @@ def main():
     check(rw.report.settings_sig == radar.settings_sig(eff0), "tornato alle impostazioni generali")
 
     # giorni attivi: il Radar salta i segnali dei giorni in cui la copia non opera (come la copia vera)
-    sig_days = {dt.datetime.fromtimestamp(x.t, dt.timezone.utc).astimezone().weekday() for x in rw.report.signals}
-    off = sorted(sig_days)[0]
+    # giorno del Mac di ogni segnale (dall'ora del messaggio, non da quella del broker)
+    day_of = {m.id: m.date.timestamp() for m in MESSAGES}
+    day_of = {i: dt.datetime.fromtimestamp(t).weekday() for i, t in day_of.items()}
+    off = sorted({day_of[x.msg_id] for x in rw.report.signals})[0]
     eng.settings.update({"days": [d for d in range(7) if d != off]})
     rw.btn_run.click()
     wait_until(lambda: not rw.running, 60)
     skipped = [x for x in rw.report.signals if x.status == "ignorato: giorno non attivo"]
-    check(skipped and all(dt.datetime.fromtimestamp(x.t, dt.timezone.utc).astimezone().weekday() == off for x in skipped),
+    expect = [x.msg_id for x in rw.report.signals if day_of[x.msg_id] == off]
+    check(skipped and [x.msg_id for x in skipped] == expect,
           "segnali dei giorni non attivi saltati", [(x.status, x.t) for x in rw.report.signals])
     check(rw.report.stats["signals"] == 10, "i segnali saltati restano nell'elenco")
     eng.settings.update({"days": list(range(7))})

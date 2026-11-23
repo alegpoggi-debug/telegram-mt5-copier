@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import DATA_DIR
-from .parser import describe, fingerprint, parse_message
+from .parser import describe, find_duplicate, fingerprint, parse_message
 
 HORIZON = 60 * 86400         # un segnale viene seguito fino alla chiusura (al massimo 60 giorni)
 RADAR_DIR = DATA_DIR / "radar"
@@ -564,7 +564,7 @@ def analyze(messages: list[dict], s: dict, resolve, rates_for, spreads: dict | N
             return False
         for key in [x for x, tt in seen.items() if t - tt >= window]:
             del seen[key]
-        if fp in seen:
+        if find_duplicate(fp, seen) is not None:
             dups += 1
             return True
         seen[fp] = t

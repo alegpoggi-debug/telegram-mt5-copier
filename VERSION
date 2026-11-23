@@ -1,4 +1,4 @@
-3.8
-Tolta la funzione «Solo canali con segnali» / «Modifica elenco».
-Nuovo cestino 🗑 accanto al nome di ogni canale per toglierlo dall'elenco («Ripristina tolti» per rimetterli).
-Sistemata la scritta RADAR sopra gli interruttori (non è più tagliata).
+3.9
+Protezione dai messaggi doppi più precisa (copia e Radar): riconosce lo stesso segnale anche se riscritto
+(fascia al contrario, TP in altro ordine o uno in più, senza prezzo, LIMIT invece che a mercato, testo in più).
+Un segnale con SL o direzione diversi resta un segnale nuovo.

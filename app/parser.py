@@ -208,6 +208,35 @@ def fingerprint(r: dict, cid=None, reply_id=None):
     return None
 
 
+def _same_signal(a, b) -> bool:
+    """Due segnali sono lo stesso segnale anche se riscritti in modo un po' diverso:
+    stesso simbolo, direzione e Stop Loss; entrata compatibile (stesso prezzo o fascia che si tocca,
+    fascia scritta al contrario, oppure uno dei due senza prezzo); TP uguali in qualsiasi ordine,
+    oppure uno contiene l'altro (TP aggiunto o tolto nel messaggio ripetuto)."""
+    _k1, sym1, side1, _ot1, e1, e1b, sl1, tps1 = a
+    _k2, sym2, side2, _ot2, e2, e2b, sl2, tps2 = b
+    if (sym1, side1, sl1) != (sym2, side2, sl2):
+        return False
+    if e1 is not None and e2 is not None:
+        lo1, hi1 = min(e1, e1b if e1b is not None else e1), max(e1, e1b if e1b is not None else e1)
+        lo2, hi2 = min(e2, e2b if e2b is not None else e2), max(e2, e2b if e2b is not None else e2)
+        if lo1 > hi2 or lo2 > hi1:
+            return False
+    t1, t2 = set(tps1), set(tps2)
+    return t1 <= t2 or t2 <= t1
+
+
+def find_duplicate(fp, seen):
+    """Impronta già vista uguale (o, per i segnali, lo stesso segnale riscritto): ritorna quella, altrimenti None."""
+    if fp in seen:
+        return fp
+    if fp and fp[0] == "signal":
+        for old in seen:
+            if old and old[0] == "signal" and _same_signal(fp, old):
+                return old
+    return None
+
+
 def describe(r: dict) -> str:
     k = r["kind"]
     if k == "signal":
