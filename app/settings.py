@@ -93,9 +93,6 @@ DEFAULTS = {
     "be_after_points": 0,
     "trailing_points": 0,
     "trailing_step_points": 10,
-    "be_on_tp2": False,            # dopo il secondo TP, SL a pareggio sulle posizioni rimaste
-    "sl_to_tp1_after_tp2": False,  # dopo il secondo TP, SL al livello del primo TP
-    "max_hours_open": 0,           # chiude l'operazione dopo queste ore (0 = mai)
     # Messaggi del canale
     "updates_target": "last_signal",
     "follow_edits": True,

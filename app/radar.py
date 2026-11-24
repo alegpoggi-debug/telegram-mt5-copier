@@ -387,18 +387,10 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
     def sl_reason(sub):
         return "be" if sub["sl"] is not None and abs(sub["sl"] - be_price) < pt / 2 else "sl"
 
-    tp_count = 0
-
     def on_tp():
-        """Dopo ogni TP preso: pareggio dopo il primo / dopo il secondo, SL al TP1 dopo il secondo."""
-        nonlocal tp_count
-        tp_count += 1
-        if s["be_on_tp1"] or (tp_count >= 2 and s.get("be_on_tp2")):
+        """Dopo ogni TP preso: pareggio sulle altre posizioni (se scelto)."""
+        if s["be_on_tp1"]:
             to_be()
-        if tp_count >= 2 and s.get("sl_to_tp1_after_tp2") and tps and tps[0] is not None:
-            for sub in subs:
-                if sub["open"] > 0 and (sub["sl"] is None or (buy and sub["sl"] < tps[0]) or (not buy and sub["sl"] > tps[0])):
-                    sub["sl"] = tps[0]
 
     def walk(j):
         """Percorso del prezzo dentro la candela j: SL e TP nell'ordine in cui vengono toccati."""
@@ -489,25 +481,7 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
                         close(sub, sub["open"] * pct / 100, exit_px, et + EXEC_DELAY, "partial")
                 if also_be:
                     to_be()
-        if s.get("max_hours_open") and t - entry_t >= s["max_hours_open"] * 3600:
-            px = bars[j][1] if buy else bars[j][1] + sp(j)     # chiusura a mercato dopo le ore scelte
-            for sub in subs:
-                if sub["open"] > 0:
-                    close(sub, sub["open"], px, t, "time")
-            break
         walk(j)
-        if s.get("trailing_points") and any(sub["open"] > 0 for sub in subs):
-            # trailing stop come la copia vera: SL a X punti dal prezzo migliore, spostato a passi (vale dalla candela dopo)
-            b = bars[j]
-            best = b[2] if buy else b[3] + sp(j)
-            gain = (best - entry_p) if buy else (entry_p - best)
-            if gain > s["trailing_points"] * pt:
-                step = max(1, s.get("trailing_step_points", 10)) * pt
-                new = best - s["trailing_points"] * pt if buy else best + s["trailing_points"] * pt
-                for sub in subs:
-                    if sub["open"] > 0 and (sub["sl"] is None or (buy and new >= sub["sl"] + step) or
-                                            (not buy and new <= sub["sl"] - step)):
-                        sub["sl"] = new
         if s["be_after_points"] and not be_auto_done and any(sub["open"] > 0 for sub in subs):
             b = bars[j]
             fav = (b[2] - entry_p) if buy else (entry_p - (b[3] + sp(j)))
@@ -549,8 +523,6 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
         sig.exit_reason = "Chiuso dal canale"
     elif reasons == {"sl"}:
         sig.exit_reason = "SL"
-    elif "time" in reasons:
-        sig.exit_reason = "Chiuso dopo le ore scelte"
     elif "tp" in reasons and "sl" in reasons:
         sig.exit_reason = "TP + SL"
     else:
@@ -767,8 +739,7 @@ SIM_KEYS = ["multi_tp_mode", "tp_index", "lot_split", "no_sl_mode", "default_sl_
             "order_type_mode", "pending_expiry_min", "ignore_duplicates", "duplicate_window_min",
             "follow_breakeven", "follow_move_sl", "follow_close", "follow_partial", "follow_cancel",
             "partial_percent", "be_on_tp1", "be_after_points", "be_offset_points", "tp_hit_action",
-            "tp_hit_partial_percent", "trailing_points", "trailing_step_points", "be_on_tp2",
-            "sl_to_tp1_after_tp2", "max_hours_open", "zone_wait", "zone_wait_seconds", "zone_margin_points", "min_sl_distance_pips",
+            "tp_hit_partial_percent", "zone_wait", "zone_wait_seconds", "zone_margin_points", "min_sl_distance_pips",
             "updates_target",
             "max_open_trades", "max_trades_per_symbol", "hours_enabled", "hours_start", "hours_end", "days",
             "blocked_symbols", "allowed_symbols", "symbol_aliases"]

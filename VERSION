@@ -1,4 +1,3 @@
-3.16
-Nuova impostazione «Quanto chiudere al TP raggiunto» (Trading → GESTIONE e ⚙ del canale): scegli la percentuale da chiudere
-quando il canale scrive che un TP è stato preso (prima era sempre il 50%).
-Il Radar ora simula anche il trailing stop, come la copia vera.
+3.17
+Tolte dal Radar le opzioni di prova che non facevano guadagnare di più (trailing, pareggio dopo il TP2, SL al TP1, chiusura dopo X ore).
+Resta la nuova impostazione «Quanto chiudere al TP raggiunto».
