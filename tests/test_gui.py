@@ -147,12 +147,21 @@ def main():
     d = gui.SettingsDialog(win, eng, "Trading")
     check(d.sw_follow_be.isChecked() == eng.settings["follow_breakeven"] and d.sp_be_off.value() == eng.settings["be_offset_points"],
           "pareggio del copiatore: valori attuali mostrati")
+    d.cb_tphit.setCurrentIndex(d.cb_tphit.findData("nothing"))
+    check(d.tphit_wrap.isHidden(), "percentuale al «TP raggiunto» nascosta se non si chiude una parte")
+    d.cb_tphit.setCurrentIndex(d.cb_tphit.findData("partial_be"))
+    check(not d.tphit_wrap.isHidden() and d.sp_tphit_pct.value() == eng.settings["tp_hit_partial_percent"],
+          "percentuale visibile con «Chiudi una parte»")
+    d.sp_tphit_pct.setValue(70)
     d.sw_follow_be.setChecked(False)
     d.sp_be_after.setValue(200)
     d.sp_be_off.setValue(15)
     d.save()
     check((eng.settings["follow_breakeven"], eng.settings["be_after_points"], eng.settings["be_offset_points"]) == (False, 200, 15),
           "pareggio del copiatore salvato")
+    check(eng.settings["tp_hit_action"] == "partial_be" and eng.settings["tp_hit_partial_percent"] == 70,
+          "percentuale al «TP raggiunto» salvata", (eng.settings["tp_hit_action"], eng.settings["tp_hit_partial_percent"]))
+    eng.settings.update({"tp_hit_action": "breakeven"})
     s2 = eng.settings.get()
     check((s2["zone_wait"], s2["zone_wait_seconds"], s2["zone_margin_points"], s2["max_spread_points"],
            s2["slippage_points"]) == (True, 20, 15, 40, 30), "impostazioni ENTRATA salvate")

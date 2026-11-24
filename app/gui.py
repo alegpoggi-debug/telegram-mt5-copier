@@ -589,8 +589,9 @@ class ChannelSettingsDialog(QDialog):
         self._spin(cl, "Pareggio automatico dopo", "0 = no.", "be_after_points", 0, 1000000, " punti", eff)
         self._spin(cl, "Margine del pareggio", None, "be_offset_points", -10000, 10000, " punti", eff)
         self._combo(cl, "Messaggio «TP raggiunto»", None, "tp_hit_action",
-                    [("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"), ("partial", "Chiudi metà"),
-                     ("partial_be", "Chiudi metà e SL a pareggio")], eff)
+                    [("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"), ("partial", "Chiudi una parte"),
+                     ("partial_be", "Chiudi una parte e SL a pareggio")], eff)
+        self._spin(cl, "Quanto chiudere al «TP raggiunto»", None, "tp_hit_partial_percent", 1, 99, " %", eff)
         bl.addWidget(c)
         bl.addStretch(1)
 
@@ -1275,11 +1276,25 @@ class SettingsDialog(QDialog):
         self._row(l4, "Margine del pareggio", "Lo Stop Loss va al prezzo di entrata più questi punti, per coprire "
                   "spread e commissioni.", self.sp_be_off)
         self.cb_tphit = QComboBox()
-        for v, t in (("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"), ("partial", "Chiudi metà"),
-                     ("partial_be", "Chiudi metà e SL a pareggio")):
+        for v, t in (("nothing", "Non fare nulla"), ("breakeven", "SL a pareggio"), ("partial", "Chiudi una parte"),
+                     ("partial_be", "Chiudi una parte e SL a pareggio")):
             self.cb_tphit.addItem(t, v)
         self.cb_tphit.setCurrentIndex(max(0, self.cb_tphit.findData(s["tp_hit_action"])))
         self._row(l4, "Messaggio «TP raggiunto»", "Cosa fare quando il canale scrive che un TP è stato preso.", self.cb_tphit)
+        self.sp_tphit_pct = QSpinBox()
+        self.sp_tphit_pct.setRange(1, 99)
+        self.sp_tphit_pct.setSuffix(" %")
+        self.sp_tphit_pct.setValue(s["tp_hit_partial_percent"])
+        _clean_spin(self.sp_tphit_pct)
+        self.tphit_wrap = QWidget()
+        tw = QVBoxLayout(self.tphit_wrap)
+        tw.setContentsMargins(0, 0, 0, 0)
+        self._row(tw, "Quanto chiudere al «TP raggiunto»", "Parte dell'operazione da chiudere quando il canale scrive "
+                  "che un TP è stato preso.", self.sp_tphit_pct)
+        l4.addWidget(self.tphit_wrap)
+        self.cb_tphit.currentIndexChanged.connect(
+            lambda _i: self.tphit_wrap.setVisible(self.cb_tphit.currentData() in ("partial", "partial_be")))
+        self.tphit_wrap.setVisible(s["tp_hit_action"] in ("partial", "partial_be"))
         lay.addWidget(c4)
 
         # orario
@@ -1355,6 +1370,7 @@ class SettingsDialog(QDialog):
             "be_after_points": self.sp_be_after.value(),
             "be_offset_points": self.sp_be_off.value(),
             "tp_hit_action": self.cb_tphit.currentData(),
+            "tp_hit_partial_percent": self.sp_tphit_pct.value(),
             "hours_enabled": self.sw_hours.isChecked(),
             "hours_start": self.tm_start.time().toString("HH:mm"),
             "hours_end": self.tm_end.time().toString("HH:mm"),

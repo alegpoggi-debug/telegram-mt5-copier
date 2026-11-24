@@ -1,5 +1,4 @@
-3.15
-Correzione importante: mentre un segnale aspetta il prezzo, gli altri messaggi dei canali vengono letti ed eseguiti subito
-(prima restavano in coda fino all'entrata). I messaggi arrivati prima dell'apertura non riguardano l'operazione.
-Radar: corretto lo stesso caso (i messaggi prima dell'entrata gonfiavano i risultati con l'attesa del prezzo).
-Radar: un «chiudete» prima dell'esecuzione cancella l'ordine pendente, come nella copia vera.
+3.16
+Nuova impostazione «Quanto chiudere al TP raggiunto» (Trading → GESTIONE e ⚙ del canale): scegli la percentuale da chiudere
+quando il canale scrive che un TP è stato preso (prima era sempre il 50%).
+Il Radar ora simula anche il trailing stop, come la copia vera.

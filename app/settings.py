@@ -194,7 +194,7 @@ SCHEMA = {
 # impostazioni che si possono personalizzare per ogni canale
 CHANNEL_KEYS = ["lot_mode", "fixed_lot", "risk_percent", "risk_money", "multi_tp_mode", "no_sl_mode",
                 "default_sl_points", "follow_breakeven", "be_on_tp1", "be_after_points", "be_offset_points",
-                "tp_hit_action", "zone_wait", "zone_wait_seconds", "min_sl_distance_pips"]
+                "tp_hit_action", "tp_hit_partial_percent", "zone_wait", "zone_wait_seconds", "min_sl_distance_pips"]
 
 
 def for_channel(general: dict, cid) -> dict:
