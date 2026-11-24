@@ -169,6 +169,29 @@ def main():
     sig, *_ = run([(T0, "BUY LIMIT GOLD 2000 SL 1990 TP 2010", None), (T0 + 60, "chiudete", 1)], S(), b)
     check(sig[0].status == "ordine mai eseguito", "limit cancellato da «chiudete» prima dell'esecuzione", sig[0].status)
 
+    # nuove opzioni (spente di base): trailing stop, pareggio dopo il TP2, SL al TP1 dopo il TP2, chiusura dopo X ore
+    b = bars_from([2000.0] * 12 + ramp(2000, 2010, 10) + ramp(2010, 2004, 6) + [2004] * 10)
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 1990 TP 2030", None)], S(trailing_points=300, trailing_step_points=10,
+                                                                     min_sl_distance_pips=0), b)
+    check(sig[0].status == "vinto" and abs(sig[0].exit_p - 2007) < 0.2,
+          "trailing stop a 300 punti: chiude 3 $ sotto il massimo", (sig[0].status, sig[0].exit_p))
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 1990 TP 2030", None)], S(min_sl_distance_pips=0), b)
+    check(sig[0].status == "aperto", "senza trailing l'operazione resta aperta", sig[0].status)
+    b = bars_from([2000.0] * 12 + ramp(2000, 2013, 13) + ramp(2013, 1985, 20) + [1985] * 5)
+    tps3 = "BUY GOLD NOW SL 1990 TP 2005 TP 2010 TP 2020"
+    sig, *_ = run([(T0, tps3, None)], S(min_sl_distance_pips=0, be_on_tp1=False), b)
+    base_pts = sig[0].points
+    sig, *_ = run([(T0, tps3, None)], S(min_sl_distance_pips=0, be_on_tp1=False, be_on_tp2=True), b)
+    check(sig[0].points > base_pts and sig[0].exit_reason == "TP + pareggio", "pareggio dopo il TP2",
+          (base_pts, sig[0].points, sig[0].exit_reason))
+    sig, *_ = run([(T0, tps3, None)], S(min_sl_distance_pips=0, be_on_tp1=False, sl_to_tp1_after_tp2=True), b)
+    check(abs(sig[0].exits[-1][1] - 2005) < 0.01 and sig[0].points > base_pts, "SL al livello del TP1 dopo il TP2",
+          sig[0].exits)
+    b = bars_from([2000.0] * 12 + [2001.0] * 300)
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 1990 TP 2030", None)], S(min_sl_distance_pips=0, max_hours_open=2), b)
+    check(sig[0].exit_reason == "Chiuso dopo le ore scelte" and 7100 <= sig[0].exit_t - sig[0].entry_t <= 7300,
+          "chiusura dopo 2 ore", (sig[0].exit_reason, sig[0].exit_t - (sig[0].entry_t or 0)))
+
     # un solo prezzo (BUY NOW 2002): aspetta che il prezzo torni vicino, come la copia vera
     b = bars_from([2008.0] * 10 + ramp(2008, 2002, 4) + ramp(2002, 2012, 20) + [2012] * 20)
     sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=600,
