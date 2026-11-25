@@ -218,6 +218,8 @@ def main():
     check(not hasattr(radar_ui, "RadarSettingsDialog") and not hasattr(radar_ui, "RadarWindow"),
           "nessun menu né finestra a parte per il Radar")
     check("Aggiorna" in rw.lbl_progress.text(), "invito ad analizzare")
+    check([rw.cb_days.itemData(i) for i in range(rw.cb_days.count())] == [7, 30, 60, 90, 180, 365] and
+          rw.cb_days.itemText(5) == "Ultimo anno", "periodi fino a un anno")
     rw.cb_days.setCurrentIndex(rw.cb_days.findData(7))
     t0 = time.time()
     rw.btn_run.click()

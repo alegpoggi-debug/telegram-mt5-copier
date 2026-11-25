@@ -334,8 +334,9 @@ class RadarPanel(QWidget):
         # ---- destra: dettaglio del canale
         self.lbl_name = gui._label("", "h2")
         self.cb_days = QComboBox()
-        for d in (7, 30, 60, 90):
-            self.cb_days.addItem(f"Ultimi {d} giorni", d)
+        for d, label in ((7, "Ultimi 7 giorni"), (30, "Ultimi 30 giorni"), (60, "Ultimi 60 giorni"),
+                         (90, "Ultimi 90 giorni"), (180, "Ultimi 6 mesi"), (365, "Ultimo anno")):
+            self.cb_days.addItem(label, d)
         self.cb_days.setCurrentIndex(max(0, self.cb_days.findData(int(engine.settings["radar_days"]))))
         self.cb_days.setMinimumWidth(170)
         self.btn_run = gui._btn("Aggiorna", self.run_scan, "primary")

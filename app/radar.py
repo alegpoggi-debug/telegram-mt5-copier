@@ -874,7 +874,7 @@ async def scan(engine, cid: int, name: str, days: int, progress=lambda text: Non
     raw = []
 
     async def read():
-        async for m in engine.tg.iter_messages(cid, limit=10000):
+        async for m in engine.tg.iter_messages(cid, limit=200000):     # fino a un anno anche per canali molto attivi
             if m.date < since:
                 break
             if (m.message or "").strip():

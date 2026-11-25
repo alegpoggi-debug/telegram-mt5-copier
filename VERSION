@@ -1,3 +1,2 @@
-3.18
-Radar: nel risultato salvato ora c'è anche a quale messaggio risponde ogni messaggio del canale
-(serve per rifare le simulazioni con gli stessi dati). Nessun cambiamento nei calcoli.
+3.19
+Radar: nuovi periodi «Ultimi 6 mesi» e «Ultimo anno» (anche per canali con molti messaggi).
