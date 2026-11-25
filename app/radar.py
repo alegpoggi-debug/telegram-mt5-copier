@@ -95,6 +95,7 @@ class RMessage:
     reading: str
     note: str = ""
     edited: bool = False
+    reply_to: int | None = None  # messaggio a cui risponde (per rifare le simulazioni con gli stessi dati)
 
 
 @dataclass
@@ -595,7 +596,8 @@ def analyze(messages: list[dict], s: dict, resolve, rates_for, spreads: dict | N
 
     for m in messages:
         r = parse_message(m["text"], s, None)
-        rm = RMessage(m["id"], m["t"], m["text"][:500], describe(r), edited=bool(m.get("edited")))
+        rm = RMessage(m["id"], m["t"], m["text"][:500], describe(r), edited=bool(m.get("edited")),
+                      reply_to=m.get("reply_to"))
         rmsgs.append(rm)
         kind = r["kind"]
         if kind in ("none", "ignore"):

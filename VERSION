@@ -1,3 +1,3 @@
-3.17
-Tolte dal Radar le opzioni di prova che non facevano guadagnare di più (trailing, pareggio dopo il TP2, SL al TP1, chiusura dopo X ore).
-Resta la nuova impostazione «Quanto chiudere al TP raggiunto».
+3.18
+Radar: nel risultato salvato ora c'è anche a quale messaggio risponde ogni messaggio del canale
+(serve per rifare le simulazioni con gli stessi dati). Nessun cambiamento nei calcoli.

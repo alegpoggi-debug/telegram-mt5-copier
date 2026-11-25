@@ -327,6 +327,12 @@ def main():
                                                                "segnale", "segnale", "segnale", "segnale", "segnale"],
           "doppio solo con gli stessi valori; entrata, SL o TP diversi: segnale nuovo", [m.note for m in msgs])
 
+    # le risposte vengono salvate nel risultato (servono per rifare le simulazioni con gli stessi dati)
+    sig, msgs, st, _ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2050", None), (T0 + 300, "chiudete metà", 1)], S(), b)
+    check(msgs[0].reply_to is None and msgs[1].reply_to == 1, "risposta salvata nel messaggio", [m.reply_to for m in msgs])
+    old = {"msg_id": 1, "t": T0, "text": "x", "reading": "y", "note": "", "edited": False}
+    check(radar.RMessage(**old).reply_to is None, "risultati salvati prima (senza risposta) si leggono ancora")
+
     # 26) dentro lo stesso minuto: candela ribassista (massimo prima del minimo) → prima il TP
     b = bars_from(flat + [2000.0]) + [(T0 + 60, 2000.5, 2015, 1985, 2000)] + bars_from([2000] * 5, T0 + 120)
     sig, *_ = run([(T0, "BUY GOLD 2000 SL 1990 TP 2010", None)], S(), b)
