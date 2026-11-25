@@ -233,7 +233,7 @@ def _nights(t1, t2, swap3):
 
 
 def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: float = 0.0, point: float | None = None,
-                    spec: dict | None = None, max_positions: int | None = None):
+                    spec: dict | None = None, max_positions: int | None = None, times: list | None = None):
     """Simula un segnale sulle candele M1 (prezzi bid, come in MetaTrader).
 
     spread: spread di riserva (se le candele non hanno quello storico). Dentro ogni minuto il prezzo
@@ -243,7 +243,8 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
     if not bars:
         sig.status = "senza prezzi"
         return
-    times = [b[0] for b in bars]
+    if times is None:                       # tempi delle candele (passati già pronti quando i segnali sono tanti)
+        times = [b[0] for b in bars]
     pt = point or _point(bars)
     side = 1 if sig.side == "buy" else -1
     buy = side > 0
@@ -674,9 +675,20 @@ def analyze(messages: list[dict], s: dict, resolve, rates_for, spreads: dict | N
                 events.setdefault(tgt.msg_id, []).append((m["t"], kk, prm))
         rm.note = "gestione" if evs else "nessuna azione"
 
+    times_of: dict = {}
+
+    def bars_times(sym):
+        """Candele e loro tempi, calcolati una sola volta per simbolo (un anno = centinaia di migliaia di candele)."""
+        if sym not in times_of:
+            b = rates_for(sym)
+            times_of[sym] = (b, [x[0] for x in b] if b else [])
+        return times_of[sym]
+
     def sim(sig, max_positions=None):
-        simulate_signal(sig, rates_for(sig.symbol), events.get(sig.msg_id, []), s, spread=spreads.get(sig.symbol, 0.0),
-                        point=points.get(sig.symbol), spec=specs.get(sig.symbol), max_positions=max_positions)
+        bars, times = bars_times(sig.symbol)
+        simulate_signal(sig, bars, events.get(sig.msg_id, []), s, spread=spreads.get(sig.symbol, 0.0),
+                        point=points.get(sig.symbol), spec=specs.get(sig.symbol), max_positions=max_positions,
+                        times=times)
 
     for sig in signals:
         if not sig.status:
@@ -707,17 +719,19 @@ def analyze(messages: list[dict], s: dict, resolve, rates_for, spreads: dict | N
         accepted.append((start, None if sig.status == "aperto" else sig.exit_t, sig.symbol, n))
     for sig in signals:
         if sig.status in ("vinto", "perso", "pareggio", "aperto") and sig.entry_t:
-            sig.spark = make_spark(rates_for(sig.symbol), sig)
+            bars, times = bars_times(sig.symbol)
+            sig.spark = make_spark(bars, sig, times=times)
     stats, equity = summarize(signals, rmsgs, dups)
     stats["limited"] = limited
     return signals, rmsgs, stats, equity
 
 
-def make_spark(bars, sig, max_points=90):
+def make_spark(bars, sig, max_points=90, times=None):
     """Prezzi attorno all'operazione (prima, durante e dopo), ridotti per una miniatura del grafico."""
     if not bars:
         return []
-    times = [b[0] for b in bars]
+    if times is None:
+        times = [b[0] for b in bars]
     end = sig.exit_t or bars[-1][0]
     pad = max(15 * 60, int((end - sig.entry_t) * 0.35))
     i0 = max(0, bisect.bisect_left(times, sig.entry_t - pad))
