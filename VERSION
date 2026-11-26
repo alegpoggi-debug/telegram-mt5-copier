@@ -1,5 +1,2 @@
-3.21
-Nuovo nel Radar: pulsante «Migliora impostazioni». Prova migliaia di combinazioni sui dati dell'ultima analisi,
-sceglie quelle più costanti (verificate sui mesi più recenti e sui valori vicini) e le confronta con le tue in un grafico.
-Con «Applica a questo canale» le mette nel ⚙ del canale. Il Margine ora si può mettere anche per singolo canale;
-il tempo massimo di attesa arriva a 2 ore.
+3.22
+Corretto «Migliora impostazioni»: si fermava con l'errore «swap_long» quando il ponte fornisce i dati esatti del simbolo.

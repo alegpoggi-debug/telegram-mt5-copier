@@ -110,8 +110,6 @@ def prepare(rep, general: dict, cid, lot: float) -> dict:
             resolve[r["symbol"].upper()] = sg.symbol
         if getattr(sg, "vpp_acc", None):
             vpp_acc[sg.symbol] = sg.vpp_acc
-    for sym, v in vpp_acc.items():
-        specs[sym] = {"vpp_acc": v}
     start = (msgs[0]["t"] - 86400) if msgs else 0
     bars, points, spreads = {}, {}, {}
     for sym in set(resolve.values()):
@@ -135,7 +133,9 @@ def prepare(rep, general: dict, cid, lot: float) -> dict:
     end = last_bar - 3 * 3600
     msgs = [m for m in msgs if m["t"] <= end]
     nweeks = max(1, int((end - week0) // (7 * 86400)) + 1)
+    # i dati del simbolo (swap…) non sono nel risultato salvato: per il denaro si usa il valore del punto del broker
     return {"msgs": msgs, "resolve": resolve, "bars": bars, "points": points, "spreads": spreads, "specs": specs,
+            "vpp_acc": vpp_acc,
             "usd_to_acc": rep.usd_to_acc, "base": base, "lot": lot, "week0": week0, "nweeks": nweeks, "end": end}
 
 
@@ -160,9 +160,9 @@ def _init(payload):
     _P = payload
 
 
-def _value(x, lot, usd_to_acc):
+def _value(x, lot, usd_to_acc, vpp_map=None):
     """Risultato in denaro di un segnale con lo stesso lotto PER SEGNALE (diviso tra le posizioni)."""
-    v = getattr(x, "vpp_acc", None)
+    v = (vpp_map or {}).get(x.symbol) or getattr(x, "vpp_acc", None)
     if v is None:
         v = (x.vpp or 1.0) * (usd_to_acc or 1.0)
     n = x.lots or 1.0
@@ -180,7 +180,7 @@ def simulate(cfg: dict, detail: bool = False) -> dict:
     weeks = [0.0] * p["nweeks"]
     ev = []
     for x in done:
-        v = _value(x, p["lot"], p["usd_to_acc"])
+        v = _value(x, p["lot"], p["usd_to_acc"], p.get("vpp_acc"))
         w = int((x.t - p["week0"]) // (7 * 86400))
         if 0 <= w < p["nweeks"]:
             weeks[w] += v

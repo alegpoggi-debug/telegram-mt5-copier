@@ -359,8 +359,8 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
 
     # swap per notte con 1 lotto (valuta del conto)
     swap_night = None
-    if spec and spec.get("vpp_acc"):
-        rate = spec["swap_long"] if buy else spec["swap_short"]
+    rate = spec.get("swap_long" if buy else "swap_short") if spec else None
+    if spec and spec.get("vpp_acc") and rate is not None:
         if spec.get("swap_mode") == 1:
             swap_night = rate * spec["vpp_acc"]
         elif spec.get("swap_mode") == 4:

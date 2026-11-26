@@ -70,8 +70,10 @@ def make_report(bars, s):
         mid += 1
         msgs.append({"id": mid, "t": times[j], "utc": times[j] - 7200, "text": "Tp 1 hit", "reply_to": mid - 1,
                      "edited": False})
+    # come con il ponte aggiornato: valore del punto e swap esatti dal broker
+    spec = {"vpp_acc": 0.92, "swap_long": -6.5, "swap_short": 2.1, "swap_mode": 1, "swap3": 3}
     sig, rmsgs, stats, eq = radar.analyze(msgs, s, lambda raw: "XAUUSD", lambda sym: bars, spreads={"XAUUSD": 0.2},
-                                          points={"XAUUSD": 0.01})
+                                          points={"XAUUSD": 0.01}, specs={"XAUUSD": spec})
     rep = radar.Report(CID, "Canale di prova", 70, "oggi", sig, rmsgs, stats, eq, spreads={"XAUUSD": 20},
                        usd_to_acc=0.9, currency="EUR", settings_sig=radar.settings_sig(s))
     radar.save_report(rep)
@@ -141,6 +143,10 @@ def main():
     check(abs(sum(x.points for x in sig2 if x.status in ("vinto", "perso", "pareggio", "aperto")) - pts_radar) < 1,
           "stessi risultati del Radar con le impostazioni attuali")
     check(same["n"] > 50, "operazioni simulate", same["n"])
+    check(payload["vpp_acc"].get("XAUUSD") == 0.92, "valore del punto del broker usato per gli euro")
+    check(radar.simulate_signal(radar.RSignal(1, T0 + 600, "XAUUSD", "buy", "market", None, None, 1990.0, [2030.0], "x"),
+                                bars, [], dict(radar_s), point=0.01, spec={"vpp_acc": 1.0}) is None,
+          "dati del simbolo incompleti: nessun errore")
 
     # ---- ricerca completa (piano ridotto), con più processori
     r = optimizer.Run(payload, workers=2, plan=small_plan())
