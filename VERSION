@@ -1,2 +1,5 @@
-3.20
-Radar molto più veloce sui periodi lunghi (6 mesi, un anno): stessi risultati, calcolo fino a 25 volte più rapido.
+3.21
+Nuovo nel Radar: pulsante «Migliora impostazioni». Prova migliaia di combinazioni sui dati dell'ultima analisi,
+sceglie quelle più costanti (verificate sui mesi più recenti e sui valori vicini) e le confronta con le tue in un grafico.
+Con «Applica a questo canale» le mette nel ⚙ del canale. Il Margine ora si può mettere anche per singolo canale;
+il tempo massimo di attesa arriva a 2 ore.

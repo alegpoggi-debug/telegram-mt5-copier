@@ -293,17 +293,20 @@ def pick(rows: list, current: dict | None) -> dict:
         return good
     cur_tot = current["m"]["tot"] if current else -1e18
     cur_dd = current["m"]["dd"] if current else 1e18
-    # una proposta deve essere davvero migliore delle impostazioni attuali
-    strict = [r for r in rows if ok(r) and r["m"]["tot"] > cur_tot + 1]
+
+    def better(r):
+        """Davvero migliore delle attuali: guadagna di più, oppure quasi uguale (80%) con cali molto più piccoli."""
+        tot, dd = r["m"]["tot"], r["m"]["dd"]
+        return tot > cur_tot + 1 or (tot > 0 and tot >= 0.8 * cur_tot and dd <= 0.7 * cur_dd)
+    strict = [r for r in rows if ok(r) and better(r)]
     loose = [r for r in rows if ok(r, strict=False) and r["m"]["tot"] > cur_tot + 1]
     out = {}
     if strict:
-        # consigliata = miglior rapporto tra guadagno (anche dei valori vicini) e calo massimo,
+        # consigliata = equilibrio: guadagno (anche dei valori vicini) meno due volte il calo massimo,
         # tra le combinazioni che guadagnano almeno il 60% della migliore: costante ma non «prudente e basta»
         top = max(r["nb_med"] for r in strict)
         cand = [r for r in strict if r["nb_med"] >= 0.6 * top]
-        out["consigliata"] = max(cand, key=lambda r: (r["nb_med"] / max(r["m"]["dd"], 0.02 * abs(r["nb_med"]), 1e-9),
-                                                      r["nb_med"]))
+        out["consigliata"] = max(cand, key=lambda r: (r["nb_med"] - 2 * r["m"]["dd"], r["nb_med"]))
     if loose:
         best = max(loose, key=lambda r: r["m"]["tot"])
         if "consigliata" not in out or _key(best["cfg"]) != _key(out["consigliata"]["cfg"]):
@@ -311,7 +314,9 @@ def pick(rows: list, current: dict | None) -> dict:
     calm = [r for r in rows if ok(r) and r["m"]["dd"] < 0.9 * cur_dd and r["m"]["tot"] >= max(0.5 * cur_tot, 0.5 * (
         out["consigliata"]["m"]["tot"] if "consigliata" in out else 0), 1)]
     if calm:
-        best = min(calm, key=lambda r: (r["m"]["dd"], -r["m"]["tot"]))
+        # tra quelle con il calo più piccolo (entro il 10%), la più redditizia
+        low = min(r["m"]["dd"] for r in calm)
+        best = max([r for r in calm if r["m"]["dd"] <= 1.1 * low], key=lambda r: (r["nb_med"], -r["m"]["dd"]))
         if all(_key(best["cfg"]) != _key(v["cfg"]) for v in out.values()):
             out["tranquilla"] = best
     return out
