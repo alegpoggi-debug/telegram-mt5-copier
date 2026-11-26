@@ -220,6 +220,9 @@ def main():
     check("Aggiorna" in rw.lbl_progress.text(), "invito ad analizzare")
     check([rw.cb_days.itemData(i) for i in range(rw.cb_days.count())] == [7, 30, 60, 90, 180, 365] and
           rw.cb_days.itemText(5) == "Ultimo anno", "periodi fino a un anno")
+    check(rw.btn_opt.text() == "Migliora impostazioni", "pulsante «Migliora impostazioni» nel Radar")
+    rw.open_optimizer()          # prima dell'analisi: spiega cosa fare, non apre niente
+    check("Aggiorna" in rw.lbl_progress.text(), "senza analisi: invito ad aggiornare", rw.lbl_progress.text())
     rw.cb_days.setCurrentIndex(rw.cb_days.findData(7))
     t0 = time.time()
     rw.btn_run.click()

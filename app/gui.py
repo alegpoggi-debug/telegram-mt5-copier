@@ -577,7 +577,9 @@ class ChannelSettingsDialog(QDialog):
         c, cl = _card(spacing=12)
         cl.addWidget(_label("ENTRATA", "section"))
         self._switch(cl, "Aspetta il prezzo del segnale", None, "zone_wait", eff)
-        self._spin(cl, "Tempo massimo di attesa", None, "zone_wait_seconds", 0, 3600, " secondi", eff)
+        self._spin(cl, "Tempo massimo di attesa", None, "zone_wait_seconds", 0, 7200, " secondi", eff)
+        self._spin(cl, "Margine", "Quanto può essere lontano il prezzo da quello del segnale.", "zone_margin_points",
+                   0, 100000, " punti", eff)
         self._spin(cl, "Distanza minima dallo Stop Loss", None, "min_sl_distance_pips", 0, 100000, " pips", eff)
         bl.addWidget(c)
 
@@ -675,7 +677,10 @@ class ChannelSettingsDialog(QDialog):
 
     def save(self):
         all_over = dict(self.engine.settings.get().get("channel_overrides") or {})
-        mine = self.values()
+        managed = {k for keys, *_ in self.items for k in keys}
+        # le personalizzazioni che questa finestra non mostra (es. «TP n° 2» scelto da «Migliora impostazioni») restano
+        mine = {k: v for k, v in self.over.items() if k not in managed}
+        mine.update(self.values())
         if mine:
             all_over[str(self.cid)] = mine
         else:
@@ -1216,7 +1221,7 @@ class SettingsDialog(QDialog):
                   "tempo, il segnale viene ignorato. Se il prezzo è già migliore (BUY più basso, SELL più alto, "
                   "ma non oltre lo SL) entra subito. Vale anche per il Radar.", self.sw_zone)
         self.sp_zone_sec = QSpinBox()
-        self.sp_zone_sec.setRange(0, 3600)
+        self.sp_zone_sec.setRange(0, 7200)
         self.sp_zone_sec.setSuffix(" secondi")
         self.sp_zone_sec.setValue(s["zone_wait_seconds"])
         _clean_spin(self.sp_zone_sec)

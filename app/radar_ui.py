@@ -343,6 +343,10 @@ class RadarPanel(QWidget):
         head = QHBoxLayout()
         head.addWidget(self.lbl_name, 1)
         head.addWidget(self.cb_days)
+        self.btn_opt = gui._btn("Migliora impostazioni", self.open_optimizer)
+        self.btn_opt.setToolTip("Prova migliaia di combinazioni di impostazioni sui dati di questa analisi e propone "
+                                "le più costanti")
+        head.addWidget(self.btn_opt)
         head.addWidget(self.btn_run)
         self.lbl_progress = gui._label("", "muted", wrap=True)
 
@@ -527,6 +531,19 @@ class RadarPanel(QWidget):
                                   + (" · ⚠ impostazioni cambiate dopo questa analisi: premi «Aggiorna»"
                                      if stale else "")
                                   + (f" · {rep.error}" if rep.error else ""))
+
+    # ---------------------------------------------------------------- migliora impostazioni
+    def open_optimizer(self):
+        cid, name = self.current()
+        if cid is None or self.running:
+            return
+        if radar.load_report(cid) is None:
+            self.lbl_progress.setText("Prima premi «Aggiorna»: «Migliora impostazioni» usa i dati dell'ultima analisi.")
+            return
+        from .optimizer_ui import OptimizeDialog
+        dlg = OptimizeDialog(self, self.engine, cid, name, self.lot(), on_applied=self.run_scan)
+        self._opt_dialog = dlg
+        dlg.exec()
 
     # ---------------------------------------------------------------- analisi
     def run_scan(self):
