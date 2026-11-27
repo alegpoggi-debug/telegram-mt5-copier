@@ -1,2 +1,5 @@
-3.22
-Corretto «Migliora impostazioni»: si fermava con l'errore «swap_long» quando il ponte fornisce i dati esatti del simbolo.
+3.23
+Tutto in un'unica finestra: Impostazioni, Radar e «Migliora impostazioni» si aprono dentro la finestra dell'app,
+con «← Indietro» per tornare (se hai modifiche non salvate te lo chiede).
+Il risultato di «Migliora impostazioni» resta salvato: riaprendo l'app lo ritrovi subito, con «Rifai il calcolo».
+Se torni indietro durante il calcolo, il calcolo continua e si salva da solo.

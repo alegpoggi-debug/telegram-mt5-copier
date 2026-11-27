@@ -415,10 +415,18 @@ class RadarPanel(QWidget):
         right.setContentsMargins(10, 0, 0, 0)
         right.addWidget(self.detail, 1)
         right.addWidget(self.empty, 1)
-        root = QHBoxLayout(self)
+        # pagine: il Radar e, al suo posto, «Migliora impostazioni» (con la freccia per tornare indietro)
+        self.main_page = QWidget()
+        root = QHBoxLayout(self.main_page)
         root.setContentsMargins(0, 0, 0, 0)
         root.addLayout(left)
         root.addLayout(right, 1)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.main_page)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.pages)
+        self.opt_view = None
 
     # ---------------------------------------------------------------- utilità
     def _table(self, headers):
@@ -541,9 +549,25 @@ class RadarPanel(QWidget):
             self.lbl_progress.setText("Prima premi «Aggiorna»: «Migliora impostazioni» usa i dati dell'ultima analisi.")
             return
         from .optimizer_ui import OptimizeDialog
-        dlg = OptimizeDialog(self, self.engine, cid, name, self.lot(), on_applied=self.run_scan)
-        self._opt_dialog = dlg
-        dlg.exec()
+        v = self.opt_view
+        busy = v is not None and v.is_running()
+        if v is None or (v.cid != cid and not busy):
+            if v is not None:
+                self.pages.removeWidget(v)
+                v.deleteLater()
+            v = OptimizeDialog(self, self.engine, cid, name, self.lot(), on_applied=self._after_apply,
+                               embedded=True, on_back=self.back_to_radar)
+            self.opt_view = v
+            self.pages.addWidget(v)
+        self.pages.setCurrentWidget(v)
+
+    def back_to_radar(self):
+        """← Torna al Radar (un calcolo in corso continua: ripremendo il pulsante si ritrova)."""
+        self.pages.setCurrentWidget(self.main_page)
+
+    def _after_apply(self):
+        self.back_to_radar()
+        self.run_scan()
 
     # ---------------------------------------------------------------- analisi
     def run_scan(self):

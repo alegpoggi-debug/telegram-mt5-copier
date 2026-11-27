@@ -262,7 +262,12 @@ class MainWindow(QMainWindow):
         root.addWidget(split, 1)
         cw = QWidget()
         cw.setLayout(root)
-        self.setCentralWidget(cw)
+        # pagine dentro un'unica finestra: la schermata principale e, al suo posto, le Impostazioni
+        self.home = cw
+        self.pages = QStackedWidget()
+        self.pages.addWidget(cw)
+        self.setCentralWidget(self.pages)
+        self.settings_view = None
 
         ui.log_sig.connect(self.add_log)
         ui.status_sig.connect(self.update_status)
@@ -409,8 +414,27 @@ class MainWindow(QMainWindow):
         self.update_status(dict(self.last_status, paused=new))
 
     def open_settings(self, page):
-        dlg = SettingsDialog(self, self.engine, page)
-        dlg.exec()
+        """Le Impostazioni si aprono dentro la finestra dell'app (con «← Indietro»), non in una finestra nuova."""
+        v = self.settings_view
+        if v is None:
+            v = SettingsDialog(self, self.engine, page, embedded=True)
+            v.finished.connect(lambda _r, w=v: self._close_settings(w))
+            self.settings_view = v
+            self.pages.addWidget(v)
+        elif page in SettingsDialog.PAGES:
+            v.nav.setCurrentRow(SettingsDialog.PAGES.index(page))
+        self.pages.setCurrentWidget(v)
+        v.show()
+        return v
+
+    def _close_settings(self, v):
+        if self.settings_view is v:
+            self.settings_view = None
+        self.pages.setCurrentWidget(self.home)
+        self.pages.removeWidget(v)
+        v.deleteLater()
+        if self.last_status:
+            self.update_status(self.last_status)
 
     def closeEvent(self, e):
         try:
@@ -692,13 +716,17 @@ class ChannelSettingsDialog(QDialog):
 class SettingsDialog(QDialog):
     PAGES = ["Telegram", "MetaTrader", "Trading", "Prova un messaggio", "Radar"]
 
-    def __init__(self, parent, engine, start_page=None):
+    def __init__(self, parent, engine, start_page=None, embedded=False):
         super().__init__(parent)
         self.engine = engine
+        self.embedded = embedded
         self.setWindowTitle("Impostazioni")
         self.setStyleSheet(STYLE)
-        self.setMinimumSize(760, 520)
-        _fit_to_screen(self, 940, 660)
+        if embedded:
+            self.setWindowFlags(Qt.Widget)     # pagina dentro la finestra dell'app, con «← Indietro»
+        else:
+            self.setMinimumSize(760, 520)
+            _fit_to_screen(self, 940, 660)
         self.s = engine.settings.get()
         self.rows: list[ChannelRow] = []
         self._loaded_chats = False
@@ -721,6 +749,11 @@ class SettingsDialog(QDialog):
 
         left = QVBoxLayout()
         left.setContentsMargins(14, 18, 6, 14)
+        if embedded:
+            self.btn_back = _btn("←  Indietro", self.go_back, "ghost")
+            self.btn_back.setToolTip("Torna alla schermata principale")
+            left.addWidget(self.btn_back, 0, Qt.AlignLeft)
+            left.addSpacing(4)
         left.addWidget(_label("Impostazioni", "h2"))
         left.addSpacing(10)
         left.addWidget(self.nav, 1)
@@ -740,6 +773,29 @@ class SettingsDialog(QDialog):
         root.addLayout(left)
         root.addLayout(right, 1)
 
+    def has_unsaved(self) -> bool:
+        """Modifiche non ancora salvate (pagina Trading, cartella di MetaTrader, codici di Telegram)."""
+        vals = self.trading_values()
+        if any(self.s.get(k) != v for k, v in vals.items()):
+            return True
+        if self.ed_mt5_dir.text().strip() != (self.s.get("mt5_dir") or ""):
+            return True
+        api_id, api_hash = self.ed_api_id.text().strip(), self.ed_api_hash.text().strip()
+        return bool(api_id) and (api_id, api_hash) != (str(self.s.get("tg_api_id") or ""), self.s.get("tg_api_hash") or "")
+
+    def go_back(self):
+        """«← Indietro»: se ci sono modifiche non salvate chiede cosa fare."""
+        if self.has_unsaved():
+            r = QMessageBox.question(self, "Modifiche non salvate", "Hai modificato delle impostazioni senza salvarle.\n\n"
+                                     "Vuoi salvarle prima di tornare indietro?",
+                                     QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+            if r == QMessageBox.Save:
+                self.save()
+                return
+            if r != QMessageBox.Discard:
+                return
+        self.reject()
+
     def _scroll(self, page):
         sc = QScrollArea()
         sc.setWidgetResizable(True)
@@ -750,7 +806,8 @@ class SettingsDialog(QDialog):
         self.stack.setCurrentIndex(i)
         if self.PAGES[i] == "Radar":
             self.radar.reload_channels()
-            _fit_to_screen(self, max(self.width(), 1240), max(self.height(), 820))
+            win = self.window()
+            _fit_to_screen(win, max(win.width(), 1240), max(win.height(), 820))
         if self.PAGES[i] == "Telegram" and self.engine.tg_authorized and not self._loaded_chats:
             self._loaded_chats = True
             self.load_channels(quiet=True)

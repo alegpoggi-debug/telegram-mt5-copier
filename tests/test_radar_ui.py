@@ -229,6 +229,17 @@ def main():
     ok = wait_until(lambda: not rw.running and rw.report is not None, 60)
     first_time = time.time() - t0
     check(ok, "analisi completata", rw.lbl_progress.text())
+    # «Migliora impostazioni»: si apre al posto del Radar, nella stessa finestra, con la freccia per tornare
+    n_top = len([w for w in QApplication.topLevelWidgets() if w.isVisible()])
+    rw.open_optimizer()
+    QTest.qWait(300)
+    ov = rw.opt_view
+    check(rw.pages.currentWidget() is ov and len([w for w in QApplication.topLevelWidgets() if w.isVisible()]) == n_top,
+          "«Migliora impostazioni» nella stessa finestra")
+    check("6 settimane" in ov.lbl_phase.text(), "pochi giorni di dati: spiega di scegliere un periodo più lungo",
+          ov.lbl_phase.text())
+    ov.btn_back.click()
+    check(rw.pages.currentWidget() is rw.main_page, "«← Torna al Radar»")
     rep = rw.report
     st = rep.stats
     check(st["signals"] == 10 and st["duplicates"] == 4, "10 segnali, 4 doppioni ignorati", (st["signals"], st["duplicates"]))

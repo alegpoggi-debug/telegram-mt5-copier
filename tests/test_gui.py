@@ -422,6 +422,48 @@ def main():
     check("SEGNALE BUY" in d.test_out.text() and "Verrebbe inviato" in d.test_out.text(), "prova un messaggio", d.test_out.text())
     d.reject()
 
+    # ---------------------------------------------------- 5b) tutto in un'unica finestra, con «← Indietro»
+    tops = lambda: [w for w in QApplication.topLevelWidgets() if w.isVisible()]  # noqa: E731
+    n_top = len(tops())
+    v = win.open_settings("Trading")
+    QTest.qWait(100)
+    check(win.pages.currentWidget() is v and v.isVisible() and len(tops()) == n_top,
+          "Impostazioni dentro la finestra dell'app, nessuna finestra nuova")
+    check(v.btn_back.isVisible() and v.btn_back.text().startswith("←"), "freccia «← Indietro»")
+    check(win.open_settings("Radar") is v and v.stack.currentWidget() is v.radar, "si riapre la stessa pagina")
+    v.btn_back.click()
+    QTest.qWait(100)
+    check(win.pages.currentWidget() is win.home and win.settings_view is None, "«← Indietro» torna alla schermata principale")
+    # modifiche non salvate: chiede cosa fare
+    old_max = eng.settings["max_open_trades"]
+    v = win.open_settings("Trading")
+    v.sp_maxpos.setValue(old_max + 3)
+    ANSWER["q"] = QMessageBox.Cancel
+    v.btn_back.click()
+    check(win.pages.currentWidget() is v, "«Annulla»: resta nelle impostazioni")
+    ANSWER["q"] = QMessageBox.Discard
+    v.btn_back.click()
+    QTest.qWait(50)
+    check(win.pages.currentWidget() is win.home and eng.settings["max_open_trades"] == old_max, "«Non salvare»: niente cambia")
+    v = win.open_settings("Trading")
+    v.sp_maxpos.setValue(old_max + 3)
+    ANSWER["q"] = QMessageBox.Save
+    v.btn_back.click()
+    QTest.qWait(50)
+    check(win.pages.currentWidget() is win.home and eng.settings["max_open_trades"] == old_max + 3, "«Salva»: salvato e torna indietro")
+    v = win.open_settings("Trading")
+    v.sp_maxpos.setValue(old_max)
+    ANSWER["q"] = QMessageBox.Yes
+    v.save()
+    QTest.qWait(50)
+    check(win.pages.currentWidget() is win.home and eng.settings["max_open_trades"] == old_max, "«Salva» in basso torna indietro")
+    v = win.open_settings("Telegram")
+    ANSWER["q"] = QMessageBox.Cancel
+    v.btn_back.click()
+    QTest.qWait(50)
+    check(win.pages.currentWidget() is win.home, "senza modifiche torna indietro senza domande")
+    ANSWER["q"] = QMessageBox.Yes
+
     # ---------------------------------------------------- 6) finestra principale
     win.update_status(eng.status_snapshot())
     check("1 canale" in win.lbl_tg.text() and "MetaTrader" in win.lbl_mt5.text(), "stato in alto")

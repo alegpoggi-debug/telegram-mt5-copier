@@ -342,10 +342,14 @@ def daily(events: list, week0: int, end: int) -> list:
     return pts
 
 
+ACTIVE: dict = {}          # canale → calcolo in corso (si ritrova anche riaprendo la pagina)
+
+
 class Run:
     """Esecuzione in background: più processori insieme, con avanzamento e annullamento."""
 
-    def __init__(self, payload: dict, workers: int | None = None, plan=None):
+    def __init__(self, payload: dict, workers: int | None = None, plan=None, on_done=None):
+        self.on_done = on_done      # chiamata alla fine (nel thread del calcolo): salva il risultato
         self.payload = payload
         self.workers = workers if workers is not None else max(1, min(8, (os.cpu_count() or 2) - 1))
         self.plan = plan or (stage1, stage2)
@@ -418,5 +422,43 @@ class Run:
                 out["series"][name] = daily(detail["events"], p["week0"], p["end"])
                 out["months"][name] = months(detail["events"])
             self.result = out
+            if self.on_done:
+                self.on_done(out)
         except Exception as e:      # noqa: BLE001 - l'errore va mostrato nella finestra
             self.error = str(e)
+
+    def start(self, key=None):
+        """Avvia in un thread; con `key` (il canale) si ritrova finché è in corso."""
+        import threading
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        if key is not None:
+            ACTIVE[key] = self
+        return self.thread
+
+    def alive(self) -> bool:
+        t = getattr(self, "thread", None)
+        return t is not None and t.is_alive()
+
+
+# ============================================================================ risultati salvati
+def _result_path(cid):
+    return radar.RADAR_DIR / f"migliora_{cid}.json"
+
+
+def save_result(cid, result: dict, meta: dict):
+    """Salva il risultato sul disco: riaprendo l'app (o il computer) si ritrova senza rifare il calcolo."""
+    radar.RADAR_DIR.mkdir(parents=True, exist_ok=True)
+    data = dict(meta, result=result)
+    tmp = _result_path(cid).with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(_result_path(cid))
+
+
+def load_result(cid) -> dict | None:
+    try:
+        data = json.loads(_result_path(cid).read_text(encoding="utf-8"))
+        return data if isinstance(data.get("result"), dict) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+

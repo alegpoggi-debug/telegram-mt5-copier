@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import threading
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -141,26 +140,44 @@ class CompareChart(QWidget):
 class OptimizeDialog(QDialog):
     """Prova migliaia di combinazioni e propone quelle più costanti, con il pulsante per applicarle."""
 
-    def __init__(self, parent, engine, cid, name, lot, on_applied=None, workers=None, plan=None):
+    def __init__(self, parent, engine, cid, name, lot, on_applied=None, workers=None, plan=None, embedded=False,
+                 on_back=None):
         super().__init__(parent)
         self.engine, self.cid, self.name, self.lot = engine, cid, name, lot
         self.on_applied = on_applied
+        self.embedded, self.on_back = embedded, on_back
+        self._workers, self._plan = workers, plan
         self.setWindowTitle(f"Migliora impostazioni · {name}")
         self.setStyleSheet(gui.STYLE)
-        self.setMinimumSize(900, 640)
-        gui._fit_to_screen(self, 1180, 860)
+        if embedded:
+            self.setWindowFlags(Qt.Widget)       # pagina dentro la finestra dell'app, non una finestra nuova
+        else:
+            self.setMinimumSize(900, 640)
+            gui._fit_to_screen(self, 1180, 860)
         self.run = None
+        self._thread = None
         self.applied = None
+        self.saved_meta = None
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setContentsMargins(*((0, 0, 0, 0) if embedded else (20, 18, 20, 16)))
         lay.setSpacing(10)
-        lay.addWidget(gui._label(f"Migliora impostazioni · {name}", "h1"))
-        self.lbl_intro = gui._label(
+        top = QHBoxLayout()
+        if embedded:
+            self.btn_back = gui._btn("←  Torna al Radar", self.go_back, "ghost")
+            top.addWidget(self.btn_back)
+        top.addWidget(gui._label(f"Migliora impostazioni · {name}", "h1"), 1)
+        self.btn_redo = gui._btn("Rifai il calcolo", lambda: self.start(force=True))
+        self.btn_redo.setToolTip("Rifà tutte le simulazioni con i dati dell'ultima analisi del Radar")
+        self.btn_redo.hide()
+        top.addWidget(self.btn_redo)
+        lay.addLayout(top)
+        self.intro_text = (
             "Rifà il Radar con migliaia di combinazioni di impostazioni, usando i messaggi e i prezzi già salvati. "
             "Per non premiare le combinazioni fortunate sceglie guardando i mesi più vecchi, controlla come sarebbero "
             "andati i mesi più recenti (mai usati per scegliere) e scarta quelle che crollano se si cambia di poco "
-            "un'impostazione. Non apre nessuna operazione.", "muted", wrap=True)
+            "un'impostazione. Non apre nessuna operazione. Il risultato resta salvato anche chiudendo l'app.")
+        self.lbl_intro = gui._label(self.intro_text, "muted", wrap=True)
         lay.addWidget(self.lbl_intro)
         self.stack = QStackedWidget()
         lay.addWidget(self.stack, 1)
@@ -200,30 +217,73 @@ class OptimizeDialog(QDialog):
         self.btn_close = gui._btn("Chiudi", self.reject)
         bottom.addWidget(self.btn_stop)
         bottom.addWidget(self.btn_close)
+        self.btn_close.setVisible(not embedded)
         lay.addLayout(bottom)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)
-        QTimer.singleShot(0, lambda: self.start(workers, plan))
+        QTimer.singleShot(0, self.start)
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def go_back(self):
+        """← Torna al Radar: un calcolo in corso continua in background."""
+        if self.on_back:
+            self.on_back()
 
     # ---------------------------------------------------------------- ricerca
-    def start(self, workers=None, plan=None):
+    def start(self, force=False):
+        if self.is_running():
+            return
+        active = optimizer.ACTIVE.get(self.cid)
+        if active is not None and active.alive():           # calcolo già in corso (pagina riaperta)
+            self.current = radar.effective_settings(self.engine.settings.get(), self.cid)
+            self._rep_generated = getattr(active, "rep_generated", None)
+            self.run, self._thread = active, active.thread
+            self.stack.setCurrentIndex(0)
+            self._timer.start(200)
+            return
         rep = radar.load_report(self.cid)
         if rep is None:
             self._fail("Prima premi «Aggiorna» nel Radar: servono i messaggi e i prezzi dell'ultima analisi.")
             return
         self.current = radar.effective_settings(self.engine.settings.get(), self.cid)
+        self._rep_generated = rep.generated
+        if not force:
+            saved = optimizer.load_result(self.cid)
+            if saved:
+                self.show_results(saved["result"], meta=saved)
+                return
+        self._clear_results()
+        self.stack.setCurrentIndex(0)
+        self.btn_redo.hide()
+        self.bar.show()
+        self.lbl_count.show()
+        self.btn_stop.show()
+        self.lbl_phase.setText("Preparo i dati…")
         payload = optimizer.prepare(rep, self.engine.settings.get(), self.cid, self.lot)
         why = optimizer.check(payload)
         if why:
             self._fail(why)
             return
         days = (payload["end"] - payload["week0"]) // 86400
-        self.lbl_intro.setText(self.lbl_intro.text() + f"\n\nDati: {len(payload['msgs'])} messaggi, circa {days} giorni "
+        self.lbl_intro.setText(self.intro_text + f"\n\nDati: {len(payload['msgs'])} messaggi, circa {days} giorni "
                                f"· confronto con {self.lot:g} lotti per segnale.")
-        self.run = optimizer.Run(payload, workers=workers, plan=plan)
-        self._thread = threading.Thread(target=self.run.run, daemon=True)
-        self._thread.start()
+        meta = {"report_generated": rep.generated, "lot": self.lot, "settings_sig": radar.settings_sig(self.current)}
+        cid = self.cid
+
+        def save(result):                                     # anche se la pagina è stata chiusa nel frattempo
+            m = dict(meta, saved_at=dt.datetime.now().strftime("%d/%m/%Y %H:%M"))
+            try:
+                optimizer.save_result(cid, result, m)
+            except OSError:
+                pass
+            run.meta = m
+        run = optimizer.Run(payload, workers=self._workers, plan=self._plan, on_done=save)
+        run.rep_generated = rep.generated
+        self.run = run
+        self._thread = run.start(key=self.cid)
         self._timer.start(200)
 
     def _poll(self):
@@ -240,11 +300,18 @@ class OptimizeDialog(QDialog):
         self._timer.stop()
         self.btn_stop.hide()
         if r.cancelled:
-            self.reject()
+            if not self.embedded:
+                self.reject()
+                return
+            saved = optimizer.load_result(self.cid)
+            if saved:
+                self.show_results(saved["result"], meta=saved)
+            else:
+                self._fail("Calcolo fermato. Premi «Rifai il calcolo» per ricominciare.")
         elif r.error:
             self._fail(f"Il miglioramento non è riuscito: {r.error}")
         else:
-            self.show_results(r.result)
+            self.show_results(r.result, meta=getattr(r, "meta", None))
 
     def stop(self):
         if self.run:
@@ -252,23 +319,57 @@ class OptimizeDialog(QDialog):
             self.lbl_phase.setText("Mi fermo…")
 
     def reject(self):
-        if self.run and self._thread.is_alive():
+        if self.embedded:                       # come pagina: «indietro», il calcolo continua
+            self.go_back()
+            return
+        if self.is_running():
             self.run.cancel()
         super().reject()
 
     def _fail(self, text):
+        self.stack.setCurrentIndex(0)
         self.lbl_phase.setText(text)
         self.lbl_phase.setWordWrap(True)
         self.bar.hide()
         self.lbl_count.hide()
         self.btn_stop.hide()
+        self.btn_redo.setVisible(radar.load_report(self.cid) is not None)
+
+    def _clear_results(self):
+        while self.res_lay.count():
+            it = self.res_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+            elif it.layout():
+                lay = it.layout()
+                while lay.count():
+                    sub = lay.takeAt(0)
+                    if sub.widget():
+                        sub.widget().deleteLater()
 
     # ---------------------------------------------------------------- risultati
     def _per_month(self, weeks_total, nweeks):
         return weeks_total / max(1e-9, nweeks / WEEKS_PER_MONTH)
 
-    def show_results(self, res):
+    def show_results(self, res, meta=None):
+        self._clear_results()
         self.result = res
+        self.saved_meta = meta
+        self.btn_redo.show()
+        self.current = radar.effective_settings(self.engine.settings.get(), self.cid)
+        if meta:
+            notes = [f"Calcolo del {meta.get('saved_at', '?')} sui dati del Radar del {meta.get('report_generated', '?')}."]
+            if meta.get("report_generated") != getattr(self, "_rep_generated", meta.get("report_generated")):
+                notes.append("⚠ Il Radar è stato aggiornato dopo questo calcolo: premi «Rifai il calcolo» per usare i dati nuovi.")
+            if meta.get("settings_sig") and meta["settings_sig"] != radar.settings_sig(self.current):
+                notes.append("Le impostazioni del canale sono cambiate dopo questo calcolo (per esempio hai applicato una "
+                             "proposta): «Le tue impostazioni» qui sotto sono quelle di allora.")
+            if meta.get("lot") is not None and abs(meta["lot"] - self.lot) > 1e-9:
+                notes.append(f"Calcolato con {meta['lot']:g} lotti per segnale (adesso nel Radar: {self.lot:g}).")
+            lbl = gui._label("\n".join(notes), "muted", wrap=True)
+            self.res_lay.addWidget(lbl)
+            self.lbl_saved = lbl
+        lot = (meta or {}).get("lot", self.lot)
         picks = res["picks"]
         nweeks = res["weeks"]
         test_weeks = nweeks - max(1, round(nweeks * 2 / 3))
@@ -281,7 +382,7 @@ class OptimizeDialog(QDialog):
         names = {k: n for k, n, _c in SERIES}
         colors = {k: c for k, _n, c in SERIES}
         self.res_lay.addWidget(gui._label(
-            f"Provate {res['tested']} combinazioni · confronto con {self.lot:g} lotti per segnale · le ultime "
+            f"Provate {res['tested']} combinazioni · confronto con {lot:g} lotti per segnale · le ultime "
             f"{test_weeks} settimane non sono state usate per scegliere («mesi mai visti»).", "muted", wrap=True))
 
         chart_card, cl = gui._card(margins=12)
@@ -377,6 +478,9 @@ class OptimizeDialog(QDialog):
         self.applied = cfg
         QMessageBox.information(self, "Fatto", f"Impostazioni «{title}» messe per il canale «{self.name}».\n\n"
                                 "Le trovi nel ⚙ accanto al canale (pagina Telegram). Ora il Radar si aggiorna.")
+        if self.embedded:
+            self.show_results(self.result, meta=self.saved_meta)     # ora le proposte si confrontano con le nuove
         if self.on_applied:
             self.on_applied()
-        self.accept()
+        if not self.embedded:
+            self.accept()

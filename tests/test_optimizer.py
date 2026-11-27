@@ -229,6 +229,57 @@ def main():
     cd.save()
     check(eng.settings.get()["channel_overrides"][str(CID)].get("tp_index") == 2, "il ⚙ conserva «TP n° 2»")
     check(any(it[0] == ["zone_margin_points"] for it in cd.items), "margine anche nel ⚙ del canale")
+    # ---- risultato salvato: riaprendo (anche dopo aver chiuso l'app) si ritrova senza rifare il calcolo
+    saved = optimizer.load_result(CID)
+    check(saved and saved["result"]["tested"] == d.result["tested"] and saved.get("saved_at") and
+          saved.get("report_generated") == "oggi", "risultato salvato sul disco con data e dati usati")
+    backs = []
+    v = OptimizeDialog(None, eng, CID, "Canale di prova", 0.03, embedded=True, on_back=lambda: backs.append(1),
+                       workers=2, plan=small_plan())
+    v.show()
+    QTest.qWait(300)
+    check(v.run is None and v.stack.currentIndex() == 1 and v.btn_redo.isVisible(),
+          "riaperto: risultato salvato mostrato subito, con «Rifai il calcolo»")
+    check("Calcolo del" in v.lbl_saved.text(), "data del calcolo mostrata", v.lbl_saved.text())
+    check("cambiate dopo questo calcolo" in v.lbl_saved.text(), "avvisa se le impostazioni sono cambiate dopo",
+          v.lbl_saved.text())
+    v.btn_back.click()
+    check(backs == [1] and v.run is None, "«← Torna al Radar»")
+    # Radar aggiornato dopo il calcolo: lo segnala
+    rep2 = radar.load_report(CID)
+    rep2.generated = "domani"
+    radar.save_report(rep2)
+    v2 = OptimizeDialog(None, eng, CID, "Canale di prova", 0.03, embedded=True, workers=2, plan=small_plan())
+    QTest.qWait(300)
+    check("aggiornato dopo questo calcolo" in v2.lbl_saved.text(), "avvisa se il Radar è stato aggiornato dopo",
+          v2.lbl_saved.text())
+    # «Rifai il calcolo»: ricalcola e salva il nuovo risultato
+    v2.btn_redo.click()
+    QTest.qWait(100)
+    check(v2.is_running() and v2.stack.currentIndex() == 0, "«Rifai il calcolo» riparte")
+    # la pagina viene chiusa durante il calcolo: riaprendola si ritrova il calcolo in corso, che si salva da solo
+    v3 = OptimizeDialog(None, eng, CID, "Canale di prova", 0.03, embedded=True, workers=2, plan=small_plan())
+    QTest.qWait(100)
+    check(v3.run is v2.run, "pagina riaperta: ritrova il calcolo in corso")
+    v2.deleteLater()
+    for _ in range(600):
+        QTest.qWait(100)
+        if not v3.is_running() and v3.stack.currentIndex() == 1:
+            break
+    check(optimizer.load_result(CID)["report_generated"] == "domani" and v3.stack.currentIndex() == 1,
+          "il calcolo finito si salva anche se la pagina è stata chiusa")
+    check("aggiornato dopo" not in v3.lbl_saved.text(), "nessun avviso dopo il ricalcolo", v3.lbl_saved.text())
+    # «Ferma» in una pagina: torna al risultato salvato
+    v3.btn_redo.click()
+    QTest.qWait(200)
+    v3.stop()
+    for _ in range(300):
+        QTest.qWait(100)
+        if not v3.is_running():
+            break
+    QTest.qWait(300)
+    check(v3.stack.currentIndex() == 1, "dopo «Ferma» resta il risultato salvato")
+
     print(f"TUTTI I {len(PASSED)} TEST DI «MIGLIORA IMPOSTAZIONI» SUPERATI")
     print("screenshot:", TMP)
     os._exit(0)
