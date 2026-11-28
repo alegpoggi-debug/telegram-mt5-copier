@@ -169,6 +169,22 @@ def main():
     sig, *_ = run([(T0, "BUY LIMIT GOLD 2000 SL 1990 TP 2010", None), (T0 + 60, "chiudete", 1)], S(), b)
     check(sig[0].status == "ordine mai eseguito", "limit cancellato da «chiudete» prima dell'esecuzione", sig[0].status)
 
+    # spread massimo (come la copia vera): con lo spread troppo alto aspetta; se non scende, salta il segnale
+    wide = [(t, o, h, l_, c, 80) for (t, o, h, l_, c, *_r) in bars_from([2000.0] * 25)]
+    narrow = [(t, o, h, l_, c, 20) for (t, o, h, l_, c, *_r) in bars_from([2000.0] * 5 + ramp(2000, 2012, 20) + [2012] * 10,
+                                                                         T0 + 15 * 60)]
+    b = wide[:-10] + narrow
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 1990 TP 2010", None)], S(max_spread_points=50, zone_wait_seconds=3600,
+                                                                     min_sl_distance_pips=0), b)
+    check(sig[0].status == "vinto" and sig[0].entry_t >= T0 + 15 * 60, "spread alto: aspetta che scenda ed entra",
+          (sig[0].status, sig[0].entry_t - T0 if sig[0].entry_t else None))
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 1990 TP 2010", None)], S(max_spread_points=50, zone_wait_seconds=300,
+                                                                     min_sl_distance_pips=0), b)
+    check(sig[0].status == "ignorato: spread troppo alto", "spread alto oltre il tempo di attesa: segnale saltato",
+          sig[0].status)
+    sig, *_ = run([(T0, "BUY GOLD NOW SL 1990 TP 2010", None)], S(max_spread_points=0, min_sl_distance_pips=0), b)
+    check(sig[0].entry_t and sig[0].entry_t < T0 + 60, "spread massimo 0 = nessun limite", sig[0].entry_t)
+
     # un solo prezzo (BUY NOW 2002): aspetta che il prezzo torni vicino, come la copia vera
     b = bars_from([2008.0] * 10 + ramp(2008, 2002, 4) + ramp(2002, 2012, 20) + [2012] * 20)
     sig, *_ = run([(T0, "BUY GOLD NOW 2002 SL 1990 TP 2010", None)], S(zone_wait=True, zone_wait_seconds=600,

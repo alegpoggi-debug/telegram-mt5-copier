@@ -54,7 +54,11 @@ QPushButton#danger {{ color: {RED}; border-color: #5a2a2a; }}
 QPushButton#danger:hover {{ background: #2a1517; }}
 QPushButton#ghost {{ background: transparent; border: none; color: {MUTED}; padding: 6px 8px; }}
 QPushButton#ghost:hover {{ color: {TEXT}; }}
-QTableWidget {{ background: transparent; border: none; gridline-color: transparent; selection-background-color: {SURFACE2}; }}
+QTableWidget {{ background: transparent; border: none; gridline-color: transparent; selection-background-color: {SURFACE2};
+  alternate-background-color: #12171d; }}
+QFrame#tile {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px; }}
+QLabel#tileValue {{ font-size: 22px; font-weight: 700; color: {TEXT}; }}
+QLabel#logo {{ background: {GREEN}; color: #0b1a0f; border-radius: 8px; font-size: 15px; font-weight: 800; }}
 QTableWidget::item {{ padding: 4px; border-bottom: 1px solid {BORDER}; }}
 QHeaderView::section {{ background: transparent; color: {MUTED}; border: none; border-bottom: 1px solid {BORDER};
   padding: 6px 4px; font-size: 11px; font-weight: 600; }}
@@ -169,15 +173,21 @@ class MainWindow(QMainWindow):
         _fit_to_screen(self, 1240, 780)
 
         # ---- intestazione
+        logo = QLabel("C")
+        logo.setObjectName("logo")
+        logo.setFixedSize(30, 30)
+        logo.setAlignment(Qt.AlignCenter)
         title = _label("Copier", "h1")
-        self.lbl_tg, self.lbl_mt5, self.lbl_acc, self.lbl_pl = (_label("", "pill") for _ in range(4))
+        self.lbl_tg, self.lbl_mt5 = (_label("", "pill") for _ in range(2))
         self.lbl_mode = _label("", "pill")
         self.btn_pause = _btn("Pausa", self.toggle_pause)
         header = QHBoxLayout()
         header.setSpacing(8)
+        header.addWidget(logo)
+        header.addSpacing(2)
         header.addWidget(title)
         header.addSpacing(10)
-        for w in (self.lbl_tg, self.lbl_mt5, self.lbl_acc, self.lbl_pl):
+        for w in (self.lbl_tg, self.lbl_mt5):
             header.addWidget(w)
         header.addStretch(1)
         header.addWidget(self.lbl_mode)
@@ -205,6 +215,32 @@ class MainWindow(QMainWindow):
         ub.addWidget(_btn("Aggiorna ora", self.do_update, "primary"))
         self.update_box.hide()
 
+        # ---- riquadri riassuntivi: conto, oggi, operazioni aperte, profitto in corso
+        tiles = QHBoxLayout()
+        tiles.setSpacing(12)
+
+        def tile(title_text):
+            f = QFrame()
+            f.setObjectName("tile")
+            lay = QVBoxLayout(f)
+            lay.setContentsMargins(16, 12, 16, 12)
+            lay.setSpacing(2)
+            lay.addWidget(_label(title_text, "section"))
+            val = _label("—", "tileValue")
+            sub = _label("", "muted")
+            lay.addWidget(val)
+            lay.addWidget(sub)
+            tiles.addWidget(f, 1)
+            return val, sub
+        self.lbl_equity, self.lbl_acc = tile("CONTO")
+        self.lbl_pl, self.lbl_pl_sub = tile("OGGI")
+        self.lbl_npos, self.lbl_npos_sub = tile("OPERAZIONI APERTE")
+        self.lbl_float, self.lbl_float_sub = tile("PROFITTO IN CORSO")
+        self.lbl_acc.setText("MetaTrader non collegato")
+        self.lbl_pl_sub.setText("dall'inizio della giornata")
+        self.lbl_npos.setText("0")
+        self.lbl_float_sub.setText("delle operazioni aperte")
+
         # ---- attività
         act_card, act = _card()
         row = QHBoxLayout()
@@ -228,9 +264,12 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(38)
         self.table.cellDoubleClicked.connect(self.open_chart)
         pos.addWidget(self.table, 1)
-        self.empty_lbl = _label("Nessuna operazione aperta", "muted")
+        self.empty_lbl = _label("Nessuna operazione aperta\n\nQuando arriva un segnale da un canale in Copia, la trovi qui.",
+                                "muted", wrap=True)
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         pos.addWidget(self.empty_lbl, 1)
         self.empty_lbl.mouseDoubleClickEvent = lambda _e: self.open_chart(-1)
@@ -257,6 +296,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(18, 14, 18, 18)
         root.setSpacing(12)
         root.addLayout(header)
+        root.addLayout(tiles)
         root.addWidget(self.setup_box)
         root.addWidget(self.update_box)
         root.addWidget(split, 1)
@@ -279,8 +319,13 @@ class MainWindow(QMainWindow):
     def add_log(self, text, level):
         now = dt.datetime.now().strftime("%H:%M")
         safe = html.escape(text).replace("\n", "<br>")
-        self.log.append(f'<div style="margin-bottom:4px"><span style="color:{FAINT}">{now}</span>&nbsp;&nbsp;'
-                        f'<span style="color:{LOG_COLORS.get(level, TEXT)}">{safe}</span></div>')
+        col = LOG_COLORS.get(level, TEXT)
+        if level == "msg":          # messaggio del canale: in evidenza, con il testo in chiaro
+            self.log.append(f'<div style="margin-top:8px"><span style="color:{BLUE}">●</span>&nbsp;'
+                            f'<span style="color:{FAINT}">{now}</span>&nbsp;&nbsp;<span style="color:{TEXT}">{safe}</span></div>')
+        else:
+            self.log.append(f'<div style="margin-bottom:3px"><span style="color:{col}">●</span>&nbsp;'
+                            f'<span style="color:{FAINT}">{now}</span>&nbsp;&nbsp;<span style="color:{col}">{safe}</span></div>')
 
     def update_status(self, st):
         self.last_status = st
@@ -296,17 +341,30 @@ class MainWindow(QMainWindow):
         acc = st.get("account")
         if acc and mt_ok:
             kind = {0: "Demo", 1: "Contest", 2: "Reale"}.get(acc["trade_mode"], "?")
-            self.lbl_acc.setText(f"{kind} {acc['login']} · {acc['equity']:.2f} {acc['currency']}")
+            self.lbl_equity.setText(f"{acc['equity']:,.2f} {acc['currency']}".replace(",", "\u202f"))
+            self.lbl_acc.setText(f"{kind} {acc['login']} · saldo {acc['balance']:.2f} {acc['currency']}")
             self.lbl_acc.setToolTip(f"Saldo {acc['balance']:.2f} · Equity {acc['equity']:.2f} {acc['currency']}")
-            self.lbl_acc.show()
         else:
-            self.lbl_acc.hide()
+            self.lbl_equity.setText("—")
+            self.lbl_acc.setText("MetaTrader non collegato")
         pl = st.get("today_pl")
         if pl is None:
-            self.lbl_pl.hide()
+            self.lbl_pl.setText("—")
+            self.lbl_pl.setStyleSheet("")
         else:
-            self.lbl_pl.setText(f'Oggi <span style="color:{GREEN if pl >= 0 else RED}">{pl:+.2f}</span>')
-            self.lbl_pl.show()
+            self.lbl_pl.setText(f"{pl:+.2f}")
+            self.lbl_pl.setStyleSheet(f"color: {GREEN if pl >= 0 else RED};")
+        pos, ords = st.get("positions", []), st.get("orders", [])
+        self.lbl_npos.setText(str(len(pos) + len(ords)))
+        self.lbl_npos_sub.setText(f"{len(pos)} {'posizione' if len(pos) == 1 else 'posizioni'} · {len(ords)} "
+                                  f"{'ordine' if len(ords) == 1 else 'ordini'} in attesa")
+        if pos:
+            fl = sum(p.get("profit", 0.0) for p in pos)
+            self.lbl_float.setText(f"{fl:+.2f}")
+            self.lbl_float.setStyleSheet(f"color: {GREEN if fl >= 0 else RED};")
+        else:
+            self.lbl_float.setText("—")
+            self.lbl_float.setStyleSheet("")
         if st.get("paused"):
             self.lbl_mode.setText(_pill(RED, "In pausa"))
         elif st.get("dry_run", True):
@@ -341,8 +399,17 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(str(v))
                 if c == 7:
                     item.setForeground(QColor(GREEN if p["profit"] >= 0 else RED))
+                    f = item.font()
+                    f.setBold(True)
+                    item.setFont(f)
                 if c == 2:
-                    item.setForeground(QColor(GREEN if p["side"].startswith("buy") else RED))
+                    buy = p["side"].startswith("buy")
+                    item.setForeground(QColor(GREEN if buy else RED))
+                    item.setBackground(QColor("#13261a" if buy else "#2a1517"))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    f = item.font()
+                    f.setBold(True)
+                    item.setFont(f)
                 self.table.setItem(r, c, item)
             if str(p["ticket"]) in selected:
                 self.table.selectRow(r)

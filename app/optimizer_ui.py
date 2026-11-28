@@ -262,14 +262,15 @@ class OptimizeDialog(QDialog):
         self.lbl_count.show()
         self.btn_stop.show()
         self.lbl_phase.setText("Preparo i dati…")
-        payload = optimizer.prepare(rep, self.engine.settings.get(), self.cid, self.lot)
+        payload = optimizer.prepare(rep, self.engine.settings.get(), self.cid, self.lot,
+                                    float(radar.prefs().get("commission", 0.0)))
         why = optimizer.check(payload)
         if why:
             self._fail(why)
             return
         days = (payload["end"] - payload["week0"]) // 86400
         self.lbl_intro.setText(self.intro_text + f"\n\nDati: {len(payload['msgs'])} messaggi, circa {days} giorni "
-                               f"· confronto con {self.lot:g} lotti per segnale.")
+                               f"· confronto con {self.lot:g} lotti per posizione.")
         meta = {"report_generated": rep.generated, "lot": self.lot, "settings_sig": radar.settings_sig(self.current)}
         cid = self.cid
 
@@ -365,7 +366,7 @@ class OptimizeDialog(QDialog):
                 notes.append("Le impostazioni del canale sono cambiate dopo questo calcolo (per esempio hai applicato una "
                              "proposta): «Le tue impostazioni» qui sotto sono quelle di allora.")
             if meta.get("lot") is not None and abs(meta["lot"] - self.lot) > 1e-9:
-                notes.append(f"Calcolato con {meta['lot']:g} lotti per segnale (adesso nel Radar: {self.lot:g}).")
+                notes.append(f"Calcolato con {meta['lot']:g} lotti per posizione (adesso nel Radar: {self.lot:g}).")
             lbl = gui._label("\n".join(notes), "muted", wrap=True)
             self.res_lay.addWidget(lbl)
             self.lbl_saved = lbl
@@ -382,7 +383,7 @@ class OptimizeDialog(QDialog):
         names = {k: n for k, n, _c in SERIES}
         colors = {k: c for k, _n, c in SERIES}
         self.res_lay.addWidget(gui._label(
-            f"Provate {res['tested']} combinazioni · confronto con {lot:g} lotti per segnale · le ultime "
+            f"Provate {res['tested']} combinazioni · confronto con {lot:g} lotti per posizione · le ultime "
             f"{test_weeks} settimane non sono state usate per scegliere («mesi mai visti»).", "muted", wrap=True))
 
         chart_card, cl = gui._card(margins=12)
@@ -435,7 +436,9 @@ class OptimizeDialog(QDialog):
         sw.setFixedSize(14, 4)
         sw.setStyleSheet(f"background: {color}; border-radius: 2px;")
         head.addWidget(sw)
-        head.addWidget(gui._label(title, "h2"), 1)
+        head.addWidget(gui._label(("★ " if key == "consigliata" else "") + title, "h2"), 1)
+        if key == "consigliata":       # la proposta consigliata si riconosce subito
+            card.setStyleSheet(f"QFrame#card {{ border: 1px solid {color}; background: #142131; }}")
         lay.addLayout(head)
         big = gui._label(_eur(self._per_month(m["tot"], nweeks)) + " al mese", "h1")
         lay.addWidget(big)

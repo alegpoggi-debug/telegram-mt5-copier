@@ -75,7 +75,8 @@ def make_report(bars, s):
     sig, rmsgs, stats, eq = radar.analyze(msgs, s, lambda raw: "XAUUSD", lambda sym: bars, spreads={"XAUUSD": 0.2},
                                           points={"XAUUSD": 0.01}, specs={"XAUUSD": spec})
     rep = radar.Report(CID, "Canale di prova", 70, "oggi", sig, rmsgs, stats, eq, spreads={"XAUUSD": 20},
-                       usd_to_acc=0.9, currency="EUR", settings_sig=radar.settings_sig(s))
+                       usd_to_acc=0.9, currency="EUR", settings_sig=radar.settings_sig(s), specs={"XAUUSD": spec},
+                       points={"XAUUSD": 0.01})
     radar.save_report(rep)
     days = {}
     for b in bars:
@@ -143,6 +144,17 @@ def main():
     check(abs(sum(x.points for x in sig2 if x.status in ("vinto", "perso", "pareggio", "aperto")) - pts_radar) < 1,
           "stessi risultati del Radar con le impostazioni attuali")
     check(same["n"] > 50, "operazioni simulate", same["n"])
+    # stessi euro del Radar: lotto per posizione, swap e commissioni compresi
+    for lot, comm in ((0.03, 0.0), (0.05, 7.0)):
+        pl = optimizer.prepare(radar.load_report(CID), eng.settings.get(), CID, lot, comm)
+        optimizer._init(pl)
+        mine = optimizer.simulate({k: radar_s.get(k) for k in optimizer.KEYS})["tot"]
+        radar_money = radar.summarize(rep.signals, rep.messages, 0, lot, rep.usd_to_acc, comm)[0]["money"]
+        check(abs(mine - radar_money) < 0.05, f"stessi euro del Radar (lotto {lot}, commissione {comm})",
+              (round(mine, 2), radar_money))
+    check(pl["specs"].get("XAUUSD", {}).get("swap_long") == -6.5 and pl["points"]["XAUUSD"] == 0.01,
+          "swap e dimensione del punto presi dal Radar")
+    optimizer._init(payload)
     check(payload["vpp_acc"].get("XAUUSD") == 0.92, "valore del punto del broker usato per gli euro")
     check(radar.simulate_signal(radar.RSignal(1, T0 + 600, "XAUUSD", "buy", "market", None, None, 1990.0, [2030.0], "x"),
                                 bars, [], dict(radar_s), point=0.01, spec={"vpp_acc": 1.0}) is None,
@@ -279,6 +291,13 @@ def main():
             break
     QTest.qWait(300)
     check(v3.stack.currentIndex() == 1, "dopo «Ferma» resta il risultato salvato")
+    import multiprocessing
+    for _ in range(50):
+        if not multiprocessing.active_children():
+            break
+        QTest.qWait(100)
+    check(not multiprocessing.active_children(), "dopo «Ferma» nessun processo di calcolo resta acceso",
+          multiprocessing.active_children())
 
     print(f"TUTTI I {len(PASSED)} TEST DI «MIGLIORA IMPOSTAZIONI» SUPERATI")
     print("screenshot:", TMP)

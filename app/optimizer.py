@@ -9,6 +9,7 @@ Per non premiare le combinazioni fortunate:
 """
 from __future__ import annotations
 
+import atexit
 import concurrent.futures as cf
 import datetime as dt
 import itertools
@@ -89,7 +90,7 @@ def changes(current: dict, proposal: dict) -> list[tuple[str, str, str]]:
 
 
 # ============================================================================ dati
-def prepare(rep, general: dict, cid, lot: float) -> dict:
+def prepare(rep, general: dict, cid, lot: float, commission: float = 0.0) -> dict:
     """Tutto quello che serve per rifare le simulazioni, dai dati già salvati dal Radar."""
     base = radar.effective_settings(general, cid)
     base_off = 7200
@@ -125,17 +126,19 @@ def prepare(rep, general: dict, cid, lot: float) -> dict:
                     continue
         bars[sym] = [seen[k] for k in sorted(seen)]
         if bars[sym]:
-            points[sym] = radar._point(bars[sym])
+            # dimensione del punto e dati del simbolo come li ha usati il Radar (da MetaTrader), se salvati
+            points[sym] = (getattr(rep, "points", None) or {}).get(sym) or radar._point(bars[sym])
             spreads[sym] = (rep.spreads or {}).get(sym, 0) * points[sym]
+            sp = (getattr(rep, "specs", None) or {}).get(sym)
+            if sp and sp.get("vpp_acc") and "swap_long" in sp:
+                specs[sym] = sp
     first_bar = min((b[0][0] for b in bars.values() if b), default=start)
     last_bar = max((b[-1][0] for b in bars.values() if b), default=start)
     week0 = max(first_bar, start) // 86400 * 86400
-    end = last_bar - 3 * 3600
-    msgs = [m for m in msgs if m["t"] <= end]
+    end = last_bar                     # come il Radar: tutti i messaggi, le operazioni ancora aperte all'ultimo prezzo
     nweeks = max(1, int((end - week0) // (7 * 86400)) + 1)
-    # i dati del simbolo (swap…) non sono nel risultato salvato: per il denaro si usa il valore del punto del broker
     return {"msgs": msgs, "resolve": resolve, "bars": bars, "points": points, "spreads": spreads, "specs": specs,
-            "vpp_acc": vpp_acc,
+            "vpp_acc": vpp_acc, "commission": commission,
             "usd_to_acc": rep.usd_to_acc, "base": base, "lot": lot, "week0": week0, "nweeks": nweeks, "end": end}
 
 
@@ -160,13 +163,17 @@ def _init(payload):
     _P = payload
 
 
-def _value(x, lot, usd_to_acc, vpp_map=None):
-    """Risultato in denaro di un segnale con lo stesso lotto PER SEGNALE (diviso tra le posizioni)."""
+def _value(x, lot, usd_to_acc, vpp_map=None, commission=0.0):
+    """Risultato in denaro di un segnale ESATTAMENTE come il Radar e la copia vera: lotto per posizione,
+    swap e commissioni compresi."""
+    m = radar.money_of(x, lot, usd_to_acc, commission)
+    if m is not None and getattr(x, "vpp_acc", None) is not None:
+        return m
     v = (vpp_map or {}).get(x.symbol) or getattr(x, "vpp_acc", None)
     if v is None:
         v = (x.vpp or 1.0) * (usd_to_acc or 1.0)
-    n = x.lots or 1.0
-    return x.points / n * v * lot + (x.swap_lot or 0.0) * lot / n
+    lots = x.lots or 1.0
+    return x.points * v * lot + (x.swap_lot or 0.0) * lot - commission * lot * lots
 
 
 def simulate(cfg: dict, detail: bool = False) -> dict:
@@ -180,7 +187,7 @@ def simulate(cfg: dict, detail: bool = False) -> dict:
     weeks = [0.0] * p["nweeks"]
     ev = []
     for x in done:
-        v = _value(x, p["lot"], p["usd_to_acc"], p.get("vpp_acc"))
+        v = _value(x, p["lot"], p["usd_to_acc"], p.get("vpp_acc"), p.get("commission", 0.0))
         w = int((x.t - p["week0"]) // (7 * 86400))
         if 0 <= w < p["nweeks"]:
             weeks[w] += v
@@ -343,6 +350,25 @@ def daily(events: list, week0: int, end: int) -> list:
 
 
 ACTIVE: dict = {}          # canale → calcolo in corso (si ritrova anche riaprendo la pagina)
+_POOLS: set = set()        # processi di calcolo aperti: si chiudono sempre (anche chiudendo l'app)
+
+
+def _kill(ex):
+    for proc in list(getattr(ex, "_processes", {}).values() or []):
+        try:
+            proc.terminate()
+        except Exception:     # noqa: BLE001
+            pass
+
+
+def _kill_all():
+    for run in list(ACTIVE.values()):
+        run.cancelled = True
+    for ex in list(_POOLS):
+        _kill(ex)
+
+
+atexit.register(_kill_all)
 
 
 class Run:
@@ -391,6 +417,7 @@ class Run:
                 try:
                     ex = cf.ProcessPoolExecutor(max_workers=self.workers, mp_context=mp.get_context("spawn"),
                                                 initializer=_init, initargs=(self.payload,))
+                    _POOLS.add(ex)
                 except (OSError, ValueError, ImportError):
                     ex = None
             try:
@@ -406,7 +433,10 @@ class Run:
                     res += self._map(ex, [c for c in second(res) if _key(c) not in seen])
             finally:
                 if ex is not None:
+                    if self.cancelled:
+                        _kill(ex)                    # «Ferma»: i processi di calcolo si chiudono subito
                     ex.shutdown(wait=False, cancel_futures=True)
+                    _POOLS.discard(ex)
             if self.cancelled:
                 return
             self.phase = "Scelgo le proposte più costanti…"

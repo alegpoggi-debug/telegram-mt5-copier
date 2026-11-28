@@ -115,6 +115,8 @@ class Report:
     note: str = ""
     precise: bool = False                            # spread storico e dati esatti del simbolo dal ponte
     settings_sig: str = ""                           # impostazioni del Radar usate per questa analisi
+    specs: dict = field(default_factory=dict)        # dati del simbolo dal broker (valore del punto, swap)
+    points: dict = field(default_factory=dict)       # dimensione del punto per simbolo (da MetaTrader)
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -268,33 +270,48 @@ def simulate_signal(sig: RSignal, bars: list, events: list, s: dict, spread: flo
             entry_t = t_exec
         first_check = i + 1
         price = bid + sp(i) if buy else bid
+        # prezzi accettati (come la copia vera): margine dal prezzo del segnale dalla parte sfavorevole,
+        # subito dalla parte favorevole, mai oltre lo SL né troppo vicino allo SL; spread non oltre il massimo
+        wlo = whi = None
         if not s["reverse"]:
-            # prezzi accettati (come la copia vera): margine dal prezzo del segnale dalla parte sfavorevole,
-            # subito dalla parte favorevole, mai oltre lo SL né troppo vicino allo SL
             zone = s["zone_wait"] and sig.entry is not None
             wlo, whi = entry_window(buy, sig.entry, sig.entry2, sig.sl, s, pt, zone=zone)
-            if (wlo is not None and price < wlo) or (whi is not None and price > whi):
-                deadline = sig.t + max(0, s["zone_wait_seconds"])
-                found = None
-                for j in range(i + 1, len(bars)):
-                    if bars[j][0] > deadline:
-                        break
-                    add = sp(j) if buy else 0.0
-                    if (whi is None or bars[j][3] + add <= whi) and (wlo is None or bars[j][2] + add >= wlo):
-                        found = (j, whi if whi is not None and price > whi else wlo)
-                        break
-                if not found:
-                    near_sl = sig.sl and ((buy and wlo is not None and price < wlo) or
-                                          (not buy and whi is not None and price > whi))
-                    if near_sl:
-                        sig.status = "ignorato: troppo vicino allo Stop Loss"
-                    elif sig.entry2 is not None:
-                        sig.status = "ignorato: prezzo fuori dalla fascia"
-                    else:
-                        sig.status = "ignorato: prezzo lontano da quello del segnale"
-                    return
-                first_check, price, entry_t = found[0], found[1], bars[found[0]][0]
-                waited = True
+        lim = s.get("max_spread_points") or 0
+
+        def spread_ok(k):
+            return not lim or sp(k) <= lim * pt + pt / 2
+        bad_price = (wlo is not None and price < wlo) or (whi is not None and price > whi)
+        if bad_price or not spread_ok(i):
+            deadline = sig.t + max(0, s["zone_wait_seconds"])
+            found = None
+            for j in range(i + 1, len(bars)):
+                if bars[j][0] > deadline:
+                    break
+                if not spread_ok(j):
+                    continue
+                add = sp(j) if buy else 0.0
+                if (whi is None or bars[j][3] + add <= whi) and (wlo is None or bars[j][2] + add >= wlo):
+                    px = bars[j][1] + add                       # apertura della candela, dentro i prezzi accettati
+                    if whi is not None:
+                        px = min(px, whi)
+                    if wlo is not None:
+                        px = max(px, wlo)
+                    found = (j, px)
+                    break
+            if not found:
+                near_sl = sig.sl and ((buy and wlo is not None and price < wlo) or
+                                      (not buy and whi is not None and price > whi))
+                if not bad_price:
+                    sig.status = "ignorato: spread troppo alto"
+                elif near_sl:
+                    sig.status = "ignorato: troppo vicino allo Stop Loss"
+                elif sig.entry2 is not None:
+                    sig.status = "ignorato: prezzo fuori dalla fascia"
+                else:
+                    sig.status = "ignorato: prezzo lontano da quello del segnale"
+                return
+            first_check, price, entry_t = found[0], found[1], bars[found[0]][0]
+            waited = True
         entry_p = price
     else:
         e = sig.entry
@@ -755,7 +772,7 @@ SIM_KEYS = ["multi_tp_mode", "tp_index", "lot_split", "no_sl_mode", "default_sl_
             "order_type_mode", "pending_expiry_min", "ignore_duplicates", "duplicate_window_min",
             "follow_breakeven", "follow_move_sl", "follow_close", "follow_partial", "follow_cancel",
             "partial_percent", "be_on_tp1", "be_after_points", "be_offset_points", "tp_hit_action",
-            "tp_hit_partial_percent", "zone_wait", "zone_wait_seconds", "zone_margin_points", "min_sl_distance_pips",
+            "tp_hit_partial_percent", "max_spread_points", "zone_wait", "zone_wait_seconds", "zone_margin_points", "min_sl_distance_pips",
             "updates_target",
             "max_open_trades", "max_trades_per_symbol", "hours_enabled", "hours_start", "hours_end", "days",
             "blocked_symbols", "allowed_symbols", "symbol_aliases"]
@@ -1040,6 +1057,6 @@ async def scan(engine, cid: int, name: str, days: int, progress=lambda text: Non
         currency = next(iter(specs.values())).get("currency") or currency
     rep = Report(cid, name, days, generated, signals, rmsgs, stats, equity, spreads=spread_pts,
                  usd_to_acc=usd_to_acc, currency=currency if (usd_to_acc or specs) else "USD", note=note,
-                 precise=precise and bool(specs), settings_sig=settings_sig(s))
+                 precise=precise and bool(specs), settings_sig=settings_sig(s), specs=specs, points=points)
     save_report(rep)
     return rep

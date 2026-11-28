@@ -1,5 +1,5 @@
-3.23
-Tutto in un'unica finestra: Impostazioni, Radar e «Migliora impostazioni» si aprono dentro la finestra dell'app,
-con «← Indietro» per tornare (se hai modifiche non salvate te lo chiede).
-Il risultato di «Migliora impostazioni» resta salvato: riaprendo l'app lo ritrovi subito, con «Rifai il calcolo».
-Se torni indietro durante il calcolo, il calcolo continua e si salva da solo.
+3.24
+Radar più preciso: considera lo spread massimo come la copia vera (con lo spread troppo alto aspetta o salta il segnale).
+«Migliora impostazioni» ora calcola gli euro esattamente come il Radar (lotto per posizione, swap e commissioni)
+e usa i dati del broker salvati dal Radar. «Ferma» chiude subito tutti i calcoli.
+Nuovo design della schermata principale: riquadri con conto, guadagno di oggi, operazioni aperte e profitto in corso.
